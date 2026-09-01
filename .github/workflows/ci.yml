@@ -1,18 +1,12 @@
 name: CI
 
-# ⚠️ 当前状态：模板，尚未生效
-# 本仓库还没有配置远端（git remote 为空），GitHub 不会加载这个文件。
-# 激活步骤（一次性）：
-#   1. 在 GitHub 新建一个私有仓库（本仓库含交付包文档与源码副本，建议私有）
-#   2. git remote add origin <仓库地址>
-#   3. git push -u origin main
-# 之后 push / PR / 打 v* 标签即会自动触发；也可以直接在 GitHub 页面手动运行
-# （Actions → CI → Run workflow）。
-#
+# CI 工作流（已启用）
 # 触发时机：
 #   - push / PR 到 main：只跑测试
 #   - push tag（v*）：跑测试 + 打包离线程序
-#   - 手动触发（workflow_dispatch）：同上
+#   - 手动触发（workflow_dispatch）：同上，可在 GitHub Actions 页面 Run workflow
+# 注意：必须用 windows-latest —— 部署目标是 Windows，启动 .bat 为 GBK 编码、
+#       路径与防火墙命令均为 Windows 专有，在 Linux 上跑会产生与目标环境无关的假失败。
 on:
   push:
     branches: [main]
