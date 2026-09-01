@@ -1,0 +1,148 @@
+{% import "macros/icons.html" as icons %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# CSRF 令牌（DEF-002）：main.js 的 AJAX 请求从这里读取，放进 X-CSRF-Token 头 #}
+    {% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
+    <title>{% block title %}督办系统{% endblock %}</title>
+    <script>
+        // 深色模式防闪烁：渲染前同步应用偏好（默认浅色）
+        (function () {
+            try {
+                if (localStorage.getItem('db-theme') === 'dark') {
+                    document.documentElement.classList.add('dark');
+                }
+            } catch (e) { }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css', v='20260830af') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg', v='20260830af') }}">
+</head>
+<body class="page-{{ request.endpoint|replace('.', '-') }}">
+
+{# ============================================================ #}
+{# 顶部导航栏（V2：替代左侧边栏） #}
+{# ============================================================ #}
+<header class="topbar">
+    <button class="icon-btn nav-toggle" id="nav-toggle" type="button" title="菜单" aria-label="打开菜单">
+        {{ icons.icon('menu', 20) }}
+    </button>
+
+    <div class="topbar-brand">
+        <span class="brand-mark">{{ icons.brand_mark() }}</span>
+        <span class="brand-text">
+            <span class="brand-title">督办系统</span><br>
+            <span class="brand-sub">{{ now_str|default('') }}</span>
+        </span>
+    </div>
+
+    <nav class="topbar-nav">
+        <a href="{{ url_for('dashboard.overview') }}"
+           class="{{ 'active' if request.endpoint == 'dashboard.overview' }}">
+            {{ icons.icon('layout-dashboard', 15) }} 概览
+        </a>
+        <a href="{{ url_for('task.task_list') }}"
+           class="{{ 'active' if request.endpoint and request.endpoint.startswith('task.') }}">
+            {{ icons.icon('list-checks', 15) }} 任务
+        </a>
+        <a href="{{ url_for('settings.profile') }}"
+           class="{{ 'active' if request.endpoint == 'settings.profile' }}">
+            {{ icons.icon('settings', 15) }} 设置
+        </a>
+        {% if current_user and current_user['role'] == 'admin' %}
+        <a href="{{ url_for('user.user_manage') }}"
+           class="{{ 'active' if request.endpoint and request.endpoint.startswith('user.') }}">
+            {{ icons.icon('users', 15) }} 用户管理
+        </a>
+        <a href="{{ url_for('settings.system') }}"
+           class="{{ 'active' if request.endpoint == 'settings.system' }}">
+            {{ icons.icon('wrench', 15) }} 系统设置
+        </a>
+        {% endif %}
+    </nav>
+
+    <div class="topbar-actions">
+        {# 深色模式切换 #}
+        <button class="icon-btn" id="theme-toggle" type="button" title="切换深色/浅色模式" aria-label="切换深色模式">
+            <span class="ic-sun" style="display:none;">{{ icons.icon('sun', 18) }}</span>
+            <span class="ic-moon">{{ icons.icon('moon', 18) }}</span>
+        </button>
+
+        {# 消息铃铛（抽屉入口） #}
+        <button class="icon-btn" id="bell-btn" type="button" title="消息通知" aria-label="消息通知">
+            {{ icons.icon('bell', 18) }}
+            <span class="badge" id="unread-badge"
+                  style="{{ '' if unread_count and unread_count > 0 else 'display:none;' }}">{{ unread_count if unread_count <= 99 else '99+' }}</span>
+        </button>
+
+        {% if current_user %}
+        <span class="user-pill" title="{{ current_user['username'] }}">
+            <span class="avatar">{{ current_user['display_name'][:1] }}</span>
+            <span>{{ current_user['display_name'] }}</span>
+            <span class="role-tag">{{ '管理员' if current_user['role'] == 'admin' else '负责人' }}</span>
+        </span>
+        <a class="icon-btn" href="{{ url_for('auth.logout') }}" title="退出登录" aria-label="退出登录">
+            {{ icons.icon('log-out', 18) }}
+        </a>
+        {% endif %}
+    </div>
+</header>
+
+{# 移动端下拉导航 #}
+<nav class="mobile-nav" id="mobile-nav">
+    <a href="{{ url_for('dashboard.overview') }}" class="{{ 'active' if request.endpoint == 'dashboard.overview' }}">
+        {{ icons.icon('layout-dashboard', 16) }} 概览
+    </a>
+    <a href="{{ url_for('task.task_list') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('task.') }}">
+        {{ icons.icon('list-checks', 16) }} 任务
+    </a>
+    <a href="{{ url_for('settings.profile') }}" class="{{ 'active' if request.endpoint == 'settings.profile' }}">
+        {{ icons.icon('settings', 16) }} 设置
+    </a>
+    {% if current_user and current_user['role'] == 'admin' %}
+    <a href="{{ url_for('user.user_manage') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('user.') }}">
+        {{ icons.icon('users', 16) }} 用户管理
+    </a>
+    <a href="{{ url_for('settings.system') }}" class="{{ 'active' if request.endpoint == 'settings.system' }}">
+        {{ icons.icon('wrench', 16) }} 系统设置
+    </a>
+    {% endif %}
+</nav>
+
+{# ============================================================ #}
+{# 主内容区 #}
+{# ============================================================ #}
+<main class="main-content">
+    {# Flash 消息（兜底，同时转发为 Toast） #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="flash-container">
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}" data-toast="{{ category }}" data-toast-msg="{{ message }}">{{ message }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+</main>
+
+{# ============================================================ #}
+{# 全局抽屉层：任务详情抽屉（批次 3 挂载） + 消息抽屉 #}
+{# ============================================================ #}
+<div class="drawer-overlay" id="drawer-overlay"></div>
+<div class="drawer" id="drawer-main">
+    <div class="drawer-body" id="drawer-main-body" style="padding:0;">
+        <div style="text-align:center;padding:48px 20px;color:var(--color-text-muted);">加载中...</div>
+    </div>
+</div>
+
+{# Toast 容器 #}
+<div class="toast-container" id="toast-container"></div>
+
+<script src="{{ url_for('static', filename='js/main.js', v='20260830af') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

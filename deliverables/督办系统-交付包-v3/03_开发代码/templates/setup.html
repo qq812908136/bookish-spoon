@@ -1,0 +1,76 @@
+{% import "macros/icons.html" as icons %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统初始化 - 督办系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css', v='20260830af') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg', v='20260830af') }}">
+</head>
+<body>
+<div class="auth-page">
+
+    {# 左侧品牌介绍 #}
+    <div class="auth-hero">
+        <div class="hero-logo">
+            <span class="brand-mark">{{ icons.brand_mark() }}</span>
+            <span>督办系统</span>
+        </div>
+        <h1>欢迎使用督办系统<br>创建首个管理员账号</h1>
+        <p>首次启动需要创建一个管理员账号。管理员可以新增负责人账号、创建和督办任务、配置预警参数。</p>
+        <div class="hero-features">
+            <div class="hero-feature">{{ icons.icon('user', 16) }} 管理员：全局管理 + 督办 + 用户管理</div>
+            <div class="hero-feature">{{ icons.icon('list-checks', 16) }} 负责人：领取任务 + 汇报进度 + 过程留痕</div>
+            <div class="hero-feature">{{ icons.icon('shield-check', 16) }} 数据存储在本机，安全可控</div>
+        </div>
+    </div>
+
+    {# 右侧表单 #}
+    <div class="auth-form-side">
+        <div class="auth-card" style="max-width:400px;">
+            <div class="auth-logo">
+                <h1>系统初始化</h1>
+                <p>请创建管理员账号（仅需一次）</p>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" action="{{ url_for('auth.setup') }}">
+                <div class="form-group">
+                    <label for="username">登录用户名</label>
+                    <input type="text" id="username" name="username" class="form-control"
+                           placeholder="至少 3 个字符" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label for="display_name">显示姓名</label>
+                    <input type="text" id="display_name" name="display_name" class="form-control"
+                           placeholder="如：张三" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">密码</label>
+                    <input type="password" id="password" name="password" class="form-control"
+                           placeholder="至少 6 个字符" required>
+                </div>
+                <div class="form-group">
+                    <label for="confirm_password">确认密码</label>
+                    <input type="password" id="confirm_password" name="confirm_password" class="form-control"
+                           placeholder="再次输入密码" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">创建管理员账号</button>
+            </form>
+
+            <p class="text-muted text-center mt-16" style="font-size:12px;">
+                管理员创建后可在系统中新增其他用户
+            </p>
+        </div>
+    </div>
+</div>
+</body>
+</html>

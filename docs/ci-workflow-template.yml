@@ -1,0 +1,99 @@
+name: CI
+
+# ⚠️ 当前状态：模板，尚未生效
+# 本仓库还没有配置远端（git remote 为空），GitHub 不会加载这个文件。
+# 激活步骤（一次性）：
+#   1. 在 GitHub 新建一个私有仓库（本仓库含交付包文档与源码副本，建议私有）
+#   2. git remote add origin <仓库地址>
+#   3. git push -u origin main
+# 之后 push / PR / 打 v* 标签即会自动触发；也可以直接在 GitHub 页面手动运行
+# （Actions → CI → Run workflow）。
+#
+# 触发时机：
+#   - push / PR 到 main：只跑测试
+#   - push tag（v*）：跑测试 + 打包离线程序
+#   - 手动触发（workflow_dispatch）：同上
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 测试（Python ${{ matrix.python-version }}）
+    # 必须用 Windows：项目部署目标是 Windows，
+    # 启动脚本 .bat 为 GBK 编码、路径与防火墙命令均为 Windows 专有，
+    # 在 Linux 上跑会产生大量与目标环境无关的假失败。
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装依赖
+        # 只装运行时依赖：pyinstaller 仅打包时需要，测试用不到，
+        # 装上会明显拖慢 CI。
+        run: |
+          python -m pip install --upgrade pip
+          pip install Flask==3.0.3 openpyxl==3.1.5
+
+      - name: 运行测试套件
+        # 测试使用独立数据库 tests/test_data/test_supervision.db，
+        # 不会污染演示数据。
+        run: python -m unittest tests.test_suite -v
+
+      - name: 生成测试报告
+        if: always()
+        run: python tests/generate_test_report.py
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 测试报告-py${{ matrix.python-version }}
+          path: docs/测试报告/
+          if-no-files-found: warn
+
+  package:
+    name: 打包离线程序
+    runs-on: windows-latest
+    needs: test
+    # 仅在打 tag 时打包：PyInstaller 耗时较长，不必每次提交都跑
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖（含打包工具）
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: PyInstaller 打包
+        # 打包参数集中在 督办系统.spec，入口为 src/app.py
+        run: python -m PyInstaller 督办系统.spec --noconfirm
+
+      - name: 上传离线程序
+        uses: actions/upload-artifact@v4
+        with:
+          name: 督办系统-离线程序
+          path: dist/督办系统/
+          if-no-files-found: error

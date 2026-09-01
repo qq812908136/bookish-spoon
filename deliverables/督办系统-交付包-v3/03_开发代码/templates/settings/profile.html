@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}个人设置 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1 class="page-title">个人设置</h1>
+</div>
+
+{# 基本信息修改 #}
+<div class="card" style="max-width:560px;">
+    <div class="card-title">基本信息</div>
+    <form method="POST" action="{{ url_for('settings.profile') }}">
+        <div class="form-group">
+            <label>显示姓名</label>
+            <input type="text" name="display_name" class="form-control"
+                   value="{{ current_user['display_name'] }}" required>
+        </div>
+        <div class="form-group">
+            <label>用户名（不可修改）</label>
+            <input type="text" class="form-control" value="{{ current_user['username'] }}" disabled>
+        </div>
+        <div class="form-group">
+            <label>角色</label>
+            <input type="text" class="form-control"
+                   value="{{ '管理员' if current_user['role'] == 'admin' else '负责人' }}" disabled>
+        </div>
+        <button type="submit" class="btn btn-primary">保存显示名</button>
+    </form>
+</div>
+
+{# 修改密码 #}
+<div class="card" style="max-width:560px;">
+    <div class="card-title">修改密码</div>
+    <form method="POST" action="{{ url_for('settings.profile') }}">
+        <div class="form-group">
+            <label>原密码</label>
+            <input type="password" name="old_password" class="form-control" placeholder="请输入当前密码">
+        </div>
+        <div class="form-group">
+            <label>新密码</label>
+            <input type="password" name="new_password" class="form-control" placeholder="至少6位">
+        </div>
+        <div class="form-group">
+            <label>确认新密码</label>
+            <input type="password" name="confirm_password" class="form-control" placeholder="再次输入新密码">
+        </div>
+        <p class="text-muted" style="font-size:12px;margin-bottom:12px;">
+            如不需修改密码，请留空以上三项。
+        </p>
+        <button type="submit" class="btn btn-primary">修改密码</button>
+    </form>
+</div>
+
+{% endblock %}

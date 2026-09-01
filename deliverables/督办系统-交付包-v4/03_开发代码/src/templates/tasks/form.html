@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% block title %}{{ '编辑任务' if is_edit else '新建任务' }} - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1 class="page-title">{{ '编辑任务' if is_edit else '新建任务' }}</h1>
+    <a href="{{ url_for('task.task_list') }}" class="btn btn-secondary">返回列表</a>
+</div>
+
+<div class="card" style="max-width:640px;">
+    <form method="POST" action="{{ url_for('task.task_new') if not is_edit else '#' }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        {# 提示：owner 只能创建自己的任务 #}
+        {% if not is_edit and current_user['role'] == 'owner' %}
+        <div class="flash info" style="margin-bottom:16px;">
+            负责人创建任务时，任务将自动指派给自己。
+        </div>
+        {% endif %}
+
+        <div class="form-group">
+            <label for="title">任务标题 <span style="color:var(--color-red);">*</span></label>
+            <input type="text" id="title" name="title" class="form-control"
+                   value="{{ form_data.title|default('') }}" maxlength="100"
+                   placeholder="简明概括任务内容（限100字）" required>
+        </div>
+
+        <div class="form-group">
+            <label for="description">工作要求/描述</label>
+            <textarea id="description" name="description" class="form-control" rows="5"
+                      placeholder="详细说明任务要求、验收标准等...">{{ form_data.description|default('') }}</textarea>
+        </div>
+
+        {# V2 批次 4：新增 3 字段（进度 / 协同方 / 风险点），校验口径与抽屉行内编辑一致 #}
+        <div class="detail-grid">
+            <div class="form-group">
+                <label for="progress_percent">{{ icon('trending-up', 13) }} 进度（%）</label>
+                <input type="number" id="progress_percent" name="progress_percent" class="form-control"
+                       min="0" max="100" step="1" value="{{ form_data.progress_percent|default(0) }}"
+                       placeholder="0-100 的整数，默认 0">
+            </div>
+
+            <div class="form-group">
+                <label for="collaborators">{{ icon('users', 13) }} 协同方</label>
+                <input type="text" id="collaborators" name="collaborators" class="form-control"
+                       maxlength="500" value="{{ form_data.collaborators|default('') }}"
+                       placeholder="协作部门/人员，如：财务部、王五">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="risk_note">{{ icon('alert-circle', 13) }} 风险点说明</label>
+            <textarea id="risk_note" name="risk_note" class="form-control" rows="3" maxlength="500"
+                      placeholder="任务推进中的风险点、卡点说明（选填）...">{{ form_data.risk_note|default('') }}</textarea>
+        </div>
+
+        <div class="detail-grid">
+            <div class="form-group">
+                <label for="priority">优先级 <span style="color:var(--color-red);">*</span></label>
+                <select id="priority" name="priority" class="form-control">
+                    {% for p in priorities %}
+                    <option value="{{ p }}" {% if form_data.priority|default('medium') == p %}selected{% endif %}>
+                        {{ priority_labels[p] }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="due_date">截止日期 <span style="color:var(--color-red);">*</span></label>
+                <input type="{{ 'date' if form_data.due_date else 'text' }}" id="due_date" name="due_date" class="form-control date-input"
+                       value="{{ form_data.due_date|default('') }}"
+                       placeholder="点击选择截止日期"
+                       onfocus="if(this.type!=='date'){this.type='date';}"
+                       onblur="if(!this.value){this.type='text';}"
+                       required>
+            </div>
+        </div>
+
+        {% if not is_edit and current_user['role'] == 'admin' %}
+        <div class="form-group">
+            <label for="assignee">负责人 <span style="color:var(--color-red);">*</span></label>
+            <select id="assignee" name="assignee" class="form-control" required>
+                <option value="">请选择负责人</option>
+                {% for u in active_users %}
+                <option value="{{ u['user_id'] }}" {% if form_data.assignee|default('') == u['user_id']|string %}selected{% endif %}>
+                    {{ u['display_name'] }}（{{ u['username'] }}）
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+
+        <div class="flex gap-12 mt-16">
+            <button type="submit" class="btn btn-primary">{{ '保存修改' if is_edit else '创建任务' }}</button>
+            <a href="{{ url_for('task.task_list') }}" class="btn btn-secondary">取消</a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

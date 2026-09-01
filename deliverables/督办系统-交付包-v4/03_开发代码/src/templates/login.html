@@ -1,0 +1,150 @@
+{% import "macros/icons.html" as icons %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
+    <title>登录 - 督办系统</title>
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('db-theme') === 'dark') {
+                    document.documentElement.classList.add('dark');
+                }
+            } catch (e) { }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css', v='20260830af') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg', v='20260830af') }}">
+</head>
+<body>
+<div class="auth-page">
+
+    {# 左侧品牌介绍（移动端隐藏） #}
+    <div class="auth-hero">
+        <div class="hero-logo">
+            <span class="brand-mark">{{ icons.brand_mark() }}</span>
+            <span>督办系统</span>
+        </div>
+        <h1>任务跟踪 · 进度督办<br>闭环管理</h1>
+        <p>把分散在各处的任务统一收口，逾期自动预警，进度全程留痕，让每一件事都有回音、有着落。</p>
+        <div class="hero-features">
+            <div class="hero-feature">{{ icons.icon('target', 16) }} 统一任务池，全局进度一目了然</div>
+            <div class="hero-feature">{{ icons.icon('alert-circle', 16) }} 三层预警：即将到期 / 已逾期 / 长期待激活</div>
+            <div class="hero-feature">{{ icons.icon('check-circle', 16) }} 闭环率统计与负责人督办矩阵</div>
+            <div class="hero-feature">{{ icons.icon('shield-check', 16) }} 局域网部署，数据本地存储</div>
+        </div>
+    </div>
+
+    {# 右侧登录卡片 #}
+    <div class="auth-form-side">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <h1>欢迎回来</h1>
+                <p>请登录您的账号，继续督办工作</p>
+            </div>
+
+            {# 来自登出等场景的 flash 提示，必须在登录页消费掉，避免带到 dashboard #}
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flash-container">
+                        {% for category, message in messages %}
+                            <div class="flash {{ category }}" data-toast="{{ category }}" data-toast-msg="{{ message }}">{{ message }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" action="{{ url_for('auth.login') }}" id="login-form" novalidate>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="form-group {{ 'has-error' if error_field == 'username' }}" id="fg-username">
+                    <label for="username">用户名</label>
+                    <input type="text" id="username" name="username" class="form-control"
+                           value="{{ username or remembered_username or '' }}"
+                           placeholder="请输入用户名" autocomplete="username">
+                    <span class="field-error" id="err-username">{{ '请输入用户名' if error_field == 'username' else '' }}</span>
+                </div>
+
+                <div class="form-group {{ 'has-error' if error_field == 'password' }}" id="fg-password">
+                    <label for="password">密码</label>
+                    <div class="pwd-wrapper">
+                        <input type="password" id="password" name="password" class="form-control"
+                               placeholder="请输入密码" autocomplete="current-password">
+                        <button type="button" class="pwd-toggle" id="pwd-toggle" title="显示/隐藏密码" aria-label="显示或隐藏密码">
+                            <span class="ic-eye">{{ icons.icon('eye', 17) }}</span>
+                            <span class="ic-eye-off" style="display:none;">{{ icons.icon('eye-off', 17) }}</span>
+                        </button>
+                    </div>
+                    <span class="field-error" id="err-password">{{ '请输入密码' if error_field == 'password' else '' }}</span>
+                </div>
+
+                <div class="remember-row">
+                    <label>
+                        <input type="checkbox" name="remember" value="1" {{ 'checked' if remembered_username else '' }}>
+                        记住用户名
+                    </label>
+                </div>
+
+                {# 通用错误（账号密码不匹配等） #}
+                {% if general_error %}
+                <div class="field-error show" style="margin-bottom:12px;">{{ general_error }}</div>
+                {% endif %}
+
+                <button type="submit" class="btn btn-primary btn-block">登 录</button>
+            </form>
+
+            <p class="text-muted text-center mt-24" style="font-size:12px;">
+                督办系统 · 局域网本地部署版
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    // 密码可见切换
+    var toggle = document.getElementById('pwd-toggle');
+    var pwd = document.getElementById('password');
+    if (toggle && pwd) {
+        toggle.addEventListener('click', function () {
+            var show = pwd.type === 'password';
+            pwd.type = show ? 'text' : 'password';
+            toggle.querySelector('.ic-eye').style.display = show ? 'none' : '';
+            toggle.querySelector('.ic-eye-off').style.display = show ? '' : 'none';
+        });
+    }
+
+    // 字段级校验：空字段定位到具体输入框下方红字
+    var form = document.getElementById('login-form');
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            var username = document.getElementById('username');
+            var password = document.getElementById('password');
+            var errU = document.getElementById('err-username');
+            var errP = document.getElementById('err-password');
+            var fgU = document.getElementById('fg-username');
+            var fgP = document.getElementById('fg-password');
+            var ok = true;
+
+            errU.classList.remove('show'); errP.classList.remove('show');
+            fgU.classList.remove('has-error'); fgP.classList.remove('has-error');
+
+            if (!username.value.trim()) {
+                errU.textContent = '请输入用户名'; errU.classList.add('show');
+                fgU.classList.add('has-error'); ok = false;
+            }
+            if (!password.value) {
+                errP.textContent = '请输入密码'; errP.classList.add('show');
+                fgP.classList.add('has-error'); ok = false;
+            }
+            if (!ok) e.preventDefault();
+        });
+    }
+})();
+</script>
+<script src="{{ url_for('static', filename='js/main.js', v='20260830af') }}"></script>
+</body>
+</html>

@@ -1,0 +1,286 @@
+{# ============================================================
+   tasks/_drawer.html — 任务详情抽屉片段（V2 批次 3，Q3 核心）
+
+   由 GET /tasks/<id>/drawer 渲染，main.js drawer 管理器注入 #drawer-main-body。
+   结构契约（与 static/js/main.js 对应）：
+   - .drawer-close                  关闭按钮
+   - .drawer-tabs button[data-tab]  页签切换
+   - .drawer-tab-pane               页签面板
+   - .inline-field.editable         行内编辑（data-type/data-field/data-url/data-options）
+   - .drawer-form                   AJAX 表单提交（JSON 响应 → drawer.reload）
+   - .resolve-blocker-btn[data-url] 标记阻塞解决
+   - .delete-evidence-btn[data-url] 删除证据（V2 批次 4，仅 admin）
+   - .delete-blocker-btn[data-url]  删除阻塞（V2 批次 4，仅 admin）
+   权限：can_edit = can_edit_task（admin 全部；owner 仅自己的任务，他人任务只读）
+   ============================================================ #}
+{% from "macros/icons.html" import icon %}
+
+{# 下拉选项 JSON（供行内编辑 select 用） #}
+{% set priority_options = [] %}
+{% for p in priorities %}{% set _ = priority_options.append([p, priority_labels[p]]) %}{% endfor %}
+{% set assignee_options = [] %}
+{% for u in active_users %}{% set _ = assignee_options.append([u['user_id'], u['display_name']]) %}{% endfor %}
+{% set field_url = url_for('task.task_field', task_id=task['task_id']) %}
+
+<div class="drawer-header">
+    <h2 title="{{ task['title'] }}">{{ task['title'] }}</h2>
+    <span class="status-badge st-{{ task['status'] }}">{{ status_labels[task['status']] }}</span>
+    <button class="drawer-close" type="button" title="关闭" aria-label="关闭抽屉">{{ icon('x', 18) }}</button>
+</div>
+
+<div class="drawer-tabs">
+    <button type="button" class="active" data-tab="tab-detail">{{ icon('list-checks', 14) }}详情</button>
+    <button type="button" data-tab="tab-evidence">{{ icon('file-text', 14) }}过程证据</button>
+    <button type="button" data-tab="tab-blockers">{{ icon('alert-circle', 14) }}阻塞记录</button>
+</div>
+
+<div class="drawer-body">
+
+    {# ============================================================ #}
+    {# 页签 1：详情（行内编辑 + 状态流转 + 时间线） #}
+    {# ============================================================ #}
+    <div class="drawer-tab-pane active" id="tab-detail">
+
+        {# --- 进度条（行内编辑进度%后由 JS 联动刷新） --- #}
+        <div class="progress-lg">
+            <div class="bar"><div class="fill" style="width: {{ task['progress_percent'] or 0 }}%;"></div></div>
+            <span class="pct">{{ task['progress_percent'] or 0 }}%</span>
+        </div>
+
+        {# --- 行内编辑字段组 --- #}
+        <div class="inline-field {{ 'editable' if can_edit }}" data-type="number" data-field="progress_percent" data-url="{{ field_url }}">
+            <div class="field-label">{{ icon('trending-up', 13) }} 进度（%）</div>
+            <div class="field-value" data-raw="{{ task['progress_percent'] or 0 }}">{{ task['progress_percent'] or 0 }}<span class="field-edit-hint">点击编辑</span></div>
+        </div>
+
+        <div class="inline-field {{ 'editable' if can_edit }}" data-type="text" data-field="title" data-url="{{ field_url }}">
+            <div class="field-label">{{ icon('flag', 13) }} 任务标题</div>
+            <div class="field-value" data-raw="{{ task['title'] }}">{{ task['title'] }}<span class="field-edit-hint">点击编辑</span></div>
+        </div>
+
+        <div class="inline-field {{ 'editable' if can_edit }}" data-type="textarea" data-field="description" data-url="{{ field_url }}">
+            <div class="field-label">{{ icon('file-text', 13) }} 工作要求</div>
+            <div class="field-value" data-raw="{{ task['description'] or '' }}" style="white-space:pre-wrap;">{{ task['description'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
+        </div>
+
+        {# 负责人：仅 admin 可行内修改；owner（含自己任务）只读 #}
+        <div class="inline-field {{ 'editable' if can_edit and current_user['role'] == 'admin' }}" data-type="select" data-field="assignee"
+             data-url="{{ field_url }}" data-options="{{ assignee_options|tojson }}">
+            <div class="field-label">{{ icon('user', 13) }} 负责人</div>
+            <div class="field-value" data-raw="{{ task['assignee'] }}">{{ task['assignee_name'] or '未分配' }}<span class="field-edit-hint">点击编辑</span></div>
+        </div>
+
+        <div class="inline-field {{ 'editable' if can_edit }}" data-type="select" data-field="priority"
+             data-url="{{ field_url }}" data-options="{{ priority_options|tojson }}">
+            <div class="field-label">{{ icon('zap', 13) }} 优先级</div>
+            <div class="field-value" data-raw="{{ task['priority'] }}">{{ priority_labels[task['priority']] }}<span class="field-edit-hint">点击编辑</span></div>
+        </div>
+
+        <div class="inline-field {{ 'editable' if can_edit }}" data-type="date" data-field="due_date" data-url="{{ field_url }}">
+            <div class="field-label">{{ icon('calendar', 13) }} 截止日期</div>
+            <div class="field-value" data-raw="{{ task['due_date'] }}"
+                 {% if task['status'] == 'overdue' %}style="color:var(--color-red);font-weight:500;"{% endif %}>
+                {{ task['due_date'] }}<span class="field-edit-hint">点击编辑</span>
+            </div>
+        </div>
+
+        <div class="inline-field {{ 'editable' if can_edit }}" data-type="text" data-field="collaborators" data-url="{{ field_url }}">
+            <div class="field-label">{{ icon('users', 13) }} 协同方</div>
+            <div class="field-value" data-raw="{{ task['collaborators'] or '' }}">{{ task['collaborators'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
+        </div>
+
+        <div class="inline-field {{ 'editable' if can_edit }}" data-type="textarea" data-field="risk_note" data-url="{{ field_url }}">
+            <div class="field-label">{{ icon('alert-circle', 13) }} 风险点</div>
+            <div class="field-value" data-raw="{{ task['risk_note'] or '' }}" style="white-space:pre-wrap;">{{ task['risk_note'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
+        </div>
+
+        {# --- 只读元信息 --- #}
+        <div class="detail-grid" style="margin-bottom:16px;">
+            <div class="detail-field">
+                <span class="field-label">创建人</span>
+                <span class="field-value">{{ task['creator_name'] or '—' }}</span>
+            </div>
+            <div class="detail-field">
+                <span class="field-label">创建时间</span>
+                <span class="field-value">{{ task['created_at']|format_datetime }}</span>
+            </div>
+        </div>
+
+        {# --- 状态流转（沿用现有状态机，drawer-form AJAX 提交） --- #}
+        {% if can_edit and allowed_transitions %}
+        <form class="drawer-form" action="{{ url_for('task.task_change_status', task_id=task['task_id']) }}" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="panel-section-title" style="margin-top:8px;">状态流转</div>
+            <div class="inline-field">
+                <div class="field-label">目标状态</div>
+                <select name="status" class="form-control">
+                    {% for t in allowed_transitions %}
+                    <option value="{{ t['status'] }}">{{ t['label'] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="inline-field">
+                <div class="field-label">进度备注 / 完成说明</div>
+                <textarea name="progress_note" class="form-control" rows="2" placeholder="填写进度说明或完成情况..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">{{ icon('play', 14) }} 确认变更</button>
+        </form>
+        {% elif not can_edit %}
+        <p class="text-muted" style="font-size:12px;">{{ icon('lock', 12) }} 他人任务仅可查看，如需修改请联系管理员</p>
+        {% endif %}
+
+        {# --- 进度时间线 --- #}
+        <div class="panel-section-title" style="margin-top:20px;">进度记录</div>
+        {% if logs %}
+        <ul class="timeline">
+            {% for log in logs %}
+            <li class="timeline-item">
+                <div class="timeline-meta">
+                    <strong>{{ log['operator_name'] or '系统' }}</strong>
+                    · {{ log['operated_at']|format_datetime }}
+                    {% if log['status_from'] and log['status_to'] and log['status_from'] != log['status_to'] %}
+                    · {{ status_labels[log['status_from']] }} → {{ status_labels[log['status_to']] }}
+                    {% elif log['status_from'] and log['status_to'] %}
+                    · 进度更新
+                    {% elif not log['status_from'] and log['status_to'] %}
+                    · {{ status_labels[log['status_to']] }}
+                    {% endif %}
+                </div>
+                {% if log['progress_note'] %}
+                <div class="timeline-note">{{ log['progress_note'] }}</div>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted">暂无进度记录</p>
+        {% endif %}
+
+        {# --- 危险操作（仅管理员，仅已撤销任务；普通表单提交跳转列表页） --- #}
+        {% if can_delete %}
+        <form action="{{ url_for('task.task_delete', task_id=task['task_id']) }}" method="POST"
+              onsubmit="return confirm('确定要永久删除此任务吗？此操作不可撤销！');"
+              style="margin-top:20px;padding-top:16px;border-top:1px solid var(--color-border-light);">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger btn-sm">{{ icon('trash', 14) }} 永久删除此任务</button>
+            <span class="text-muted" style="margin-left:8px;font-size:12px;">仅已撤销任务可删除</span>
+        </form>
+        {% endif %}
+    </div>
+
+    {# ============================================================ #}
+    {# 页签 2：过程证据 #}
+    {# ============================================================ #}
+    <div class="drawer-tab-pane" id="tab-evidence">
+
+        {% if can_edit %}
+        <form class="drawer-form" action="{{ url_for('task.task_evidence_add', task_id=task['task_id']) }}" method="POST"
+              style="margin-bottom:16px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="inline-field">
+                <div class="field-label">{{ icon('plus', 13) }} 添加证据</div>
+                <div style="display:flex;gap:8px;">
+                    <select name="etype" class="form-control" style="width:110px;flex-shrink:0;">
+                        <option value="text">文字</option>
+                        <option value="link">链接</option>
+                        <option value="file">文件</option>
+                    </select>
+                    <input type="text" name="content" class="form-control" placeholder="文字内容 / URL / 文件名..." required>
+                    <button type="submit" class="btn btn-primary btn-sm" style="flex-shrink:0;">添加</button>
+                </div>
+            </div>
+        </form>
+        {% endif %}
+
+        {% if evidence %}
+            {% for ev in evidence %}
+            <div class="evidence-item">
+                <span class="ev-icon">
+                    {% if ev['etype'] == 'link' %}{{ icon('link', 16) }}
+                    {% elif ev['etype'] == 'file' %}{{ icon('file-text', 16) }}
+                    {% else %}{{ icon('pencil', 16) }}{% endif %}
+                </span>
+                <div class="ev-content">
+                    <div class="ev-text">
+                        {% if ev['etype'] == 'link' %}
+                        <a href="{{ ev['content'] }}" target="_blank" rel="noopener">{{ ev['content'] }}</a>
+                        {% else %}
+                        {{ ev['content'] }}
+                        {% endif %}
+                    </div>
+                    <div class="ev-meta">{{ evidence_type_labels[ev['etype']] }} · {{ ev['creator_name'] or '系统' }} · {{ ev['created_at']|format_datetime }}</div>
+                </div>
+                {# 删除证据（仅管理员，AJAX → JSON → drawer.reload + Toast） #}
+                {% if current_user['role'] == 'admin' %}
+                <div class="bl-actions" style="flex-shrink:0;margin-left:8px;">
+                    <button type="button" class="btn btn-danger btn-sm delete-evidence-btn"
+                            data-url="{{ url_for('task.task_evidence_delete', task_id=task['task_id'], evidence_id=ev['evidence_id']) }}"
+                            title="删除该证据">{{ icon('trash', 14) }}</button>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+        <div style="text-align:center;padding:40px 16px;color:var(--color-text-muted);">
+            {{ icon('inbox', 36) }}
+            <p style="margin-top:8px;">暂无过程证据</p>
+        </div>
+        {% endif %}
+    </div>
+
+    {# ============================================================ #}
+    {# 页签 3：阻塞记录 #}
+    {# ============================================================ #}
+    <div class="drawer-tab-pane" id="tab-blockers">
+
+        {% if can_edit %}
+        <form class="drawer-form" action="{{ url_for('task.task_blocker_add', task_id=task['task_id']) }}" method="POST"
+              style="margin-bottom:16px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="inline-field">
+                <div class="field-label">{{ icon('plus', 13) }} 添加阻塞</div>
+                <textarea name="content" class="form-control" rows="2" placeholder="描述遇到的阻塞/卡点..." required></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">添加</button>
+        </form>
+        {% endif %}
+
+        {% if blockers %}
+            {% for bl in blockers %}
+            <div class="blocker-item {{ 'resolved' if bl['status'] == 'resolved' }}">
+                <span class="bl-icon">{{ icon('alert-circle', 16) if bl['status'] == 'open' else icon('check-circle', 16) }}</span>
+                <div class="bl-content">
+                    <div class="bl-text">{{ bl['content'] }}</div>
+                    <div class="bl-meta">
+                        {{ blocker_status_labels[bl['status']] }} · {{ bl['creator_name'] or '系统' }} · {{ bl['created_at']|format_datetime }}
+                        {% if bl['status'] == 'resolved' and bl['resolver_name'] %}
+                        · 由 {{ bl['resolver_name'] }} 于 {{ bl['resolved_at']|format_datetime }} 解决
+                        {% endif %}
+                    </div>
+                </div>
+                {% if bl['status'] == 'open' and (current_user['role'] == 'admin' or bl['created_by'] == current_user['user_id']) %}
+                <div class="bl-actions">
+                    <button type="button" class="btn btn-secondary btn-sm resolve-blocker-btn"
+                            data-url="{{ url_for('task.task_blocker_resolve', task_id=task['task_id'], blocker_id=bl['blocker_id']) }}"
+                            title="标记该阻塞已解决">{{ icon('check', 14) }} 标记解决</button>
+                </div>
+                {% endif %}
+                {# 删除阻塞（仅管理员，AJAX → JSON → drawer.reload + Toast；open/resolved 均可删） #}
+                {% if current_user['role'] == 'admin' %}
+                <div class="bl-actions" style="margin-left:8px;">
+                    <button type="button" class="btn btn-danger btn-sm delete-blocker-btn"
+                            data-url="{{ url_for('task.task_blocker_delete', task_id=task['task_id'], blocker_id=bl['blocker_id']) }}"
+                            title="删除该阻塞记录">{{ icon('trash', 14) }}</button>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+        <div style="text-align:center;padding:40px 16px;color:var(--color-text-muted);">
+            {{ icon('inbox', 36) }}
+            <p style="margin-top:8px;">暂无阻塞记录</p>
+        </div>
+        {% endif %}
+    </div>
+
+</div>

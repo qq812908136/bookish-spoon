@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}请求无效 - 督办系统{% endblock %}
+{% block content %}
+<div class="error-page" style="min-height:60vh;">
+    <div class="error-code">400</div>
+    <div class="error-message">{{ message or '请求无效' }}</div>
+    <p class="text-muted mb-24">
+        这是系统的跨站请求伪造（CSRF）防护在起作用：提交的数据里缺少有效的安全令牌，
+        通常是因为这个页面打开太久没动，或者是在另一个标签页里重新登录过。
+    </p>
+    <p class="text-muted mb-24">点下面的按钮回到刚才的页面，重新操作一次即可。</p>
+    <div class="flex gap-12" style="justify-content:center;flex-wrap:wrap;">
+        <button type="button" class="btn btn-primary" onclick="history.back()">返回上一步</button>
+        <a href="{{ url_for('dashboard.overview') }}" class="btn btn-secondary">回到概览</a>
+    </div>
+</div>
+{% endblock %}

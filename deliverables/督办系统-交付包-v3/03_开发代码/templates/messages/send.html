@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}发送消息 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div class="page-header-left">
+        <h1 class="page-title">发送消息</h1>
+        <span class="page-hint">管理员可直接向指定用户发送指令消息，消息将出现在对方的通知列表中。</span>
+    </div>
+    <a href="{{ url_for('message.message_list') }}" class="btn btn-secondary">返回</a>
+</div>
+
+<div class="card" style="max-width:640px;">
+    <form method="POST" action="{{ url_for('message.send_message') }}">
+        <div class="form-group">
+            <label for="recipient">接收人 <span style="color:var(--color-red);">*</span></label>
+            <select id="recipient" name="recipient" class="form-control" required>
+                <option value="">请选择接收人</option>
+                {% for u in active_users %}
+                <option value="{{ u['user_id'] }}" {% if form_data.recipient|default('') == u['user_id']|string %}selected{% endif %}>
+                    {{ u['display_name'] }}（{{ u['username'] }}）
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="content">消息内容 <span style="color:var(--color-red);">*</span></label>
+            <textarea id="content" name="content" class="form-control" rows="6"
+                      placeholder="输入要发送的指令或通知内容..." required>{{ form_data.content|default('') }}</textarea>
+        </div>
+
+        <div class="form-group task-search-select">
+            <label for="task_search">关联任务名称（可选）</label>
+            <div class="task-search-box">
+                <input type="text" id="task_search" class="form-control"
+                       value="{{ task.title|default('') }}"
+                       placeholder="输入任务名称搜索并选择" autocomplete="off">
+                <input type="hidden" id="task_id" name="task_id" value="{{ form_data.task_id|default('') }}">
+                <ul class="task-search-dropdown" id="task_search_results"></ul>
+            </div>
+            <div class="form-text">搜索并选择关联任务后，接收人点击消息可跳转该任务详情。</div>
+        </div>
+
+        <div class="flex gap-12 mt-16">
+            <button type="submit" class="btn btn-primary">发送消息</button>
+            <a href="{{ url_for('message.message_list') }}" class="btn btn-secondary">取消</a>
+        </div>
+    </form>
+</div>
+
+<script>
+(function() {
+    var searchInput = document.getElementById('task_search');
+    var hiddenInput = document.getElementById('task_id');
+    var resultsBox  = document.getElementById('task_search_results');
+    if (!searchInput || !hiddenInput || !resultsBox) return;
+
+    var currentQuery = '';
+    var debounceTimer = null;
+
+    function renderResults(tasks) {
+        resultsBox.innerHTML = '';
+        if (!tasks || tasks.length === 0) {
+            resultsBox.innerHTML = '<li class="task-search-empty">未找到匹配任务</li>';
+            resultsBox.classList.add('open');
+            return;
+        }
+        tasks.forEach(function(t) {
+            var li = document.createElement('li');
+            li.className = 'task-search-item';
+            li.setAttribute('data-task-id', t.task_id);
+            li.setAttribute('data-title', t.title);
+            li.innerHTML = '<div class="task-search-title">' + escapeHtml(t.title) + '</div>' +
+                           '<div class="task-search-meta">' +
+                           '<span class="status-badge st-' + escapeHtml(t.status) + '">' + escapeHtml(t.status_label) + '</span>' +
+                           (t.assignee_name ? ' · 负责人：' + escapeHtml(t.assignee_name) : '') +
+                           '</div>';
+            li.addEventListener('click', function() {
+                searchInput.value = t.title;
+                hiddenInput.value = t.task_id;
+                resultsBox.innerHTML = '';
+                resultsBox.classList.remove('open');
+            });
+            resultsBox.appendChild(li);
+        });
+        resultsBox.classList.add('open');
+    }
+
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function doSearch(q) {
+        if (!q) {
+            resultsBox.innerHTML = '';
+            resultsBox.classList.remove('open');
+            return;
+        }
+        currentQuery = q;
+        fetch('{{ url_for("message.tasks_search") }}?keyword=' + encodeURIComponent(q))
+            .then(function(r) { return r.json(); })
+            .then(function(data) { if (currentQuery === q) renderResults(data.tasks); })
+            .catch(function() { renderResults([]); });
+    }
+
+    searchInput.addEventListener('input', function() {
+        hiddenInput.value = '';
+        var q = searchInput.value.trim();
+        clearTimeout(debounceTimer);
+        if (!q) {
+            resultsBox.innerHTML = '';
+            resultsBox.classList.remove('open');
+            return;
+        }
+        debounceTimer = setTimeout(function() { doSearch(q); }, 250);
+    });
+
+    // 失去焦点时延迟收起，以便点击下拉项
+    searchInput.addEventListener('blur', function() {
+        setTimeout(function() { resultsBox.classList.remove('open'); }, 180);
+    });
+    searchInput.addEventListener('focus', function() {
+        if (resultsBox.children.length) resultsBox.classList.add('open');
+    });
+
+    // 键盘导航：Esc 关闭
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            resultsBox.innerHTML = '';
+            resultsBox.classList.remove('open');
+        }
+    });
+})();
+</script>
+
+{% endblock %}

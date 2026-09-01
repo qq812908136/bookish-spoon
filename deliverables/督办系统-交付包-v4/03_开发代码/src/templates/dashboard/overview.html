@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% import "macros/icons.html" as icons %}
+{% block title %}概览 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">概览</h1>
+        <div style="font-size:12px;color:var(--color-text-muted);margin-top:2px;">
+            统计口径：按任务创建时间（{{ range_labels[range_key] }}）
+        </div>
+    </div>
+    <div class="page-header-actions">
+        {# 时间范围筛选（仅仪表盘） #}
+        <form method="get" action="{{ url_for('dashboard.overview') }}" class="range-select">
+            {{ icons.icon('calendar', 14) }}
+            <select name="range" onchange="this.form.submit()" aria-label="时间范围">
+                {% for key, label in range_labels.items() %}
+                <option value="{{ key }}" {{ 'selected' if key == range_key }}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        <a href="{{ url_for('task.task_new') }}" class="btn btn-primary">{{ icons.icon('plus', 14) }} 新建任务</a>
+    </div>
+</div>
+
+{# ============================================================ #}
+{# 6 统计卡（可点击跳转任务列表） #}
+{# ============================================================ #}
+<div class="stats-grid">
+    <a class="stat-card" href="{{ url_for('task.task_list') }}">
+        <div class="stat-label">{{ icons.icon('zap', 13) }} 任务总数</div>
+        <div class="stat-value">{{ stats.total }}</div>
+        <div class="stat-extra">不含已撤销 {{ stats.cancelled }} 项</div>
+    </a>
+    <a class="stat-card" href="{{ url_for('task.task_list', status='pending') }}">
+        <div class="stat-label">{{ icons.icon('clock', 13) }} 待启动</div>
+        <div class="stat-value">{{ stats.pending }}</div>
+    </a>
+    <a class="stat-card warn" href="{{ url_for('task.task_list', status='in_progress') }}">
+        <div class="stat-label">{{ icons.icon('play', 13) }} 进行中</div>
+        <div class="stat-value">{{ stats.in_progress }}</div>
+    </a>
+    <a class="stat-card danger" href="{{ url_for('task.task_list', status='overdue') }}">
+        <div class="stat-label">{{ icons.icon('alert-circle', 13) }} 已逾期</div>
+        <div class="stat-value">{{ stats.overdue }}</div>
+    </a>
+    <a class="stat-card success" href="{{ url_for('task.task_list', status='closed') }}">
+        <div class="stat-label">{{ icons.icon('check-circle', 13) }} 已闭环</div>
+        <div class="stat-value">{{ stats.closed }}</div>
+    </a>
+    <a class="stat-card brand" href="{{ url_for('task.task_list') }}">
+        <div class="stat-label">{{ icons.icon('trending-up', 13) }} 闭环率</div>
+        <div class="stat-value">
+            {%- if stats.closure_rate is not none -%}
+            {{ (stats.closure_rate * 100) | round(0) | int }}%
+            {%- else -%}
+            —
+            {%- endif -%}
+        </div>
+        <div class="stat-extra">闭环 {{ stats.closed }} ÷ 任务 {{ stats.total }}</div>
+    </a>
+</div>
+
+{# ============================================================ #}
+{# 主区：今日督办焦点（左） + 任务闭环矩阵（右） #}
+{# ============================================================ #}
+<div class="dash-layout">
+
+    {# ---- 左：今日督办焦点 ---- #}
+    <div class="card">
+        <div class="card-title">{{ icons.icon('target', 15) }} 今日督办焦点</div>
+        <p style="font-size:12px;color:var(--color-text-muted);margin:0 0 12px;">
+            已逾期 &gt; 进行中 &gt; 待启动，按到期日升序，最多 20 条
+        </p>
+
+        {% if focus %}
+        <ul class="focus-list">
+            {% for item in focus %}
+            <li>
+                <span class="focus-item" data-drawer="{{ url_for('task.task_drawer', task_id=item.task_id) }}">
+                    <div class="fi-title">
+                        <div class="fi-name">
+                            {{ item.title }}
+                            {% if item.is_mine %}<span class="my-tag">我的</span>{% endif %}
+                        </div>
+                        <div class="fi-meta">
+                            <span>{{ item.assignee_name or '未分配' }}</span>
+                            <span class="priority-pill {{ item.priority }}">{{ priority_labels.get(item.priority, item.priority) }}</span>
+                        </div>
+                    </div>
+                    <span class="status-badge st-{{ item.status }}">{{ status_labels.get(item.status, item.status) }}</span>
+                    <div class="fi-due {{ 'overdue' if item.status == 'overdue' }}">
+                        {{ item.due_date[5:] | replace('-', '月') }}日
+                        <div style="font-size:11px;">到期</div>
+                    </div>
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div style="text-align:center;padding:40px 20px;color:var(--color-text-muted);">
+            {{ icons.icon('check-circle', 32) }}
+            <p style="margin-top:8px;">{{ range_labels[range_key] }}范围内没有待跟进的任务</p>
+        </div>
+        {% endif %}
+    </div>
+
+    {# ---- 右：任务闭环矩阵（按负责人） ---- #}
+    {# id 保留供 main.js 的 initPaginationAjax 定位作用域容器使用 #}
+    <div class="card" id="matrix-card">
+        <div class="card-title">{{ icons.icon('users', 15) }} 任务闭环矩阵</div>
+        <p style="font-size:12px;color:var(--color-text-muted);margin:0 0 12px;">
+            按任务数降序 · 共 {{ matrix_total }} 位负责人 · 闭环率 = 闭环 ÷ 任务数
+        </p>
+
+        {% if matrix %}
+        <div class="matrix-scroll">
+            <table class="matrix-table">
+                <thead>
+                    <tr>
+                        <th>负责人</th>
+                        <th>任务数</th>
+                        <th>待启动</th>
+                        <th>进行中</th>
+                        <th>已逾期</th>
+                        <th>已闭环</th>
+                        <th>已撤销</th>
+                        <th>闭环率</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in matrix %}
+                    <tr>
+                        <td>
+                            {# 049：负责人名不再可点击（不再弹 Owner 抽屉），仅展示 #}
+                            <span class="owner-name">
+                                {{ icons.icon('user', 13) }} {{ row.display_name or '未知' }}
+                            </span>
+                        </td>
+                        <td class="num" data-drawer="{{ url_for('task.owner_drawer', user_id=row.user_id) }}" title="查看该负责人的全部任务">{{ row.total }}</td>
+                        <td class="num" data-drawer="{{ url_for('task.owner_drawer', user_id=row.user_id, status='pending') }}" title="查看该负责人的待启动任务">{{ row.pending }}</td>
+                        <td class="num" data-drawer="{{ url_for('task.owner_drawer', user_id=row.user_id, status='in_progress') }}" title="查看该负责人的进行中任务">{{ row.in_progress }}</td>
+                        <td class="num" data-drawer="{{ url_for('task.owner_drawer', user_id=row.user_id, status='overdue') }}" title="查看该负责人的已逾期任务">{{ row.overdue }}</td>
+                        <td class="num" data-drawer="{{ url_for('task.owner_drawer', user_id=row.user_id, status='closed') }}" title="查看该负责人的已闭环任务">{{ row.closed }}</td>
+                        <td class="num" data-drawer="{{ url_for('task.owner_drawer', user_id=row.user_id, status='cancelled') }}" title="查看该负责人的已撤销任务">{{ row.cancelled }}</td>
+                        <td class="num">
+                            {%- if row.closure_rate is not none -%}
+                            {%- set rate_pct = (row.closure_rate * 100) | round(0) | int -%}
+                            <span class="{{ 'rate-good' if rate_pct >= 80 else ('rate-mid' if rate_pct >= 50 else 'rate-low') }}">{{ rate_pct }}%</span>
+                            {%- else -%}
+                            <span style="color:var(--color-text-muted);">—</span>
+                            {%- endif -%}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if matrix_pages > 1 %}
+        <div class="pagination">
+            {% if matrix_page > 1 %}
+            <a href="{{ url_for('dashboard.overview', range=range_key, mpage=matrix_page - 1) }}">上一页</a>
+            {% else %}
+            <span class="disabled">上一页</span>
+            {% endif %}
+            {% for p in range(1, matrix_pages + 1) %}
+            {% if p == matrix_page %}
+            <span class="current">{{ p }}</span>
+            {% else %}
+            <a href="{{ url_for('dashboard.overview', range=range_key, mpage=p) }}">{{ p }}</a>
+            {% endif %}
+            {% endfor %}
+            {% if matrix_page < matrix_pages %}
+            <a href="{{ url_for('dashboard.overview', range=range_key, mpage=matrix_page + 1) }}">下一页</a>
+            {% else %}
+            <span class="disabled">下一页</span>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% else %}
+        <div style="text-align:center;padding:40px 20px;color:var(--color-text-muted);">
+            {{ icons.icon('inbox', 32) }}
+            <p style="margin-top:8px;">{{ range_labels[range_key] }}范围内没有任务数据</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}

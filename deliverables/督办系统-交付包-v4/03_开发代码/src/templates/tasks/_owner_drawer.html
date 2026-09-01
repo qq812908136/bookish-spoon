@@ -1,0 +1,69 @@
+{# ============================================================
+   tasks/_owner_drawer.html — Owner 抽屉片段（V2 批次 3，Q8）
+
+   由 GET /tasks/owner/<uid>/drawer 渲染（闭环矩阵点负责人名字打开）。
+   内容：负责人信息 + 推送提醒按钮（仅 admin 可见）+ 该负责人任务列表。
+   结构契约（与 static/js/main.js 对应）：
+   - .drawer-close                关闭按钮
+   - .remind-btn[data-url]        推送提醒（POST /tasks/remind，JSON）
+   - .owner-task-row[data-drawer] 任务行点击 → 打开任务详情抽屉
+   ============================================================ #}
+{% from "macros/icons.html" import icon %}
+
+<div class="drawer-header">
+    <h2>
+        <span class="avatar" style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--color-primary-light);color:var(--color-primary);font-size:13px;margin-right:8px;">{{ owner['display_name'][:1] }}</span>
+        {{ owner['display_name'] }} 的任务
+        {% if status_filter %}<span class="status-badge st-{{ status_filter }}" style="margin-left:6px;">{{ status_labels[status_filter] }}</span>{% endif %}
+    </h2>
+    <button class="drawer-close" type="button" title="关闭" aria-label="关闭抽屉">{{ icon('x', 18) }}</button>
+</div>
+
+<div class="drawer-body" style="padding-top:16px;">
+
+    {# --- 负责人概要 + 推送提醒（仅 admin） --- #}
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;padding:12px 14px;border:1px solid var(--color-border-light);border-radius:12px;background:var(--color-bg-secondary);">
+        <div>
+            <div style="font-size:14px;font-weight:500;">{{ owner['display_name'] }}（{{ owner['username'] }}）</div>
+            <div class="text-muted" style="font-size:12px;margin-top:2px;">
+                共 {{ total }} 条任务
+                {% if status_filter %} · 仅「{{ status_labels[status_filter] }}」{% endif %}
+                · 按截止日期升序，最多展示最近 50 条
+            </div>
+        </div>
+        {% if current_user['role'] == 'admin' %}
+        <button type="button" class="btn btn-primary btn-sm remind-btn"
+                data-url="{{ url_for('task.task_remind', owner_id=owner['user_id']) }}"
+                title="给该负责人发一条督办提醒站内信">{{ icon('send', 14) }} 推送提醒</button>
+        {% endif %}
+    </div>
+
+    {# --- 任务列表（点行打开任务详情抽屉） --- #}
+    {% if tasks %}
+        {% for t in tasks %}
+        <div class="owner-task-row" data-drawer="{{ url_for('task.task_drawer', task_id=t['task_id']) }}"
+             style="display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--color-border-light);border-radius:10px;margin-bottom:8px;background:var(--color-bg-secondary);cursor:pointer;transition:border-color 0.15s;"
+             onmouseover="this.style.borderColor='var(--color-primary)'" onmouseout="this.style.borderColor='var(--color-border-light)'">
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:14px;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ t['title'] }}</div>
+                <div class="text-muted" style="font-size:11px;margin-top:3px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span class="priority-pill {{ t['priority'] }}">{{ priority_labels[t['priority']] }}</span>
+                    <span {% if t['status'] == 'overdue' %}style="color:var(--color-red);font-weight:500;"{% endif %}>{{ icon('calendar', 11) }} {{ t['due_date'] }}</span>
+                </div>
+            </div>
+            <div style="flex-shrink:0;display:flex;align-items:center;gap:10px;">
+                <div class="mini-progress" title="进度 {{ t['progress_percent'] or 0 }}%">
+                    <div class="bar"><div class="fill" style="width: {{ t['progress_percent'] or 0 }}%;"></div></div>
+                    <span class="num">{{ t['progress_percent'] or 0 }}%</span>
+                </div>
+                <span class="status-badge st-{{ t['status'] }}">{{ status_labels[t['status']] }}</span>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+    <div style="text-align:center;padding:48px 20px;color:var(--color-text-muted);">
+        {{ icon('inbox', 36) }}
+        <p style="margin-top:8px;">{% if status_filter %}该负责人暂无「{{ status_labels[status_filter] }}」任务{% else %}该负责人暂无任务{% endif %}</p>
+    </div>
+    {% endif %}
+</div>

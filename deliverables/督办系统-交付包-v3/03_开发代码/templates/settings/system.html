@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}系统设置 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div class="page-header-left">
+        <h1 class="page-title">系统设置</h1>
+        <span class="page-hint">调整预警天数后，下次预警扫描时将自动按新配置执行。</span>
+    </div>
+</div>
+
+<div class="card" style="max-width:560px;">
+    <div class="card-title">预警参数配置</div>
+
+    <form method="POST" action="{{ url_for('settings.system') }}">
+        <div class="form-group">
+            <label>即将到期预警天数</label>
+            <input type="number" name="warning_due_days" class="form-control"
+                   value="{{ warning_due_days }}" min="1" max="30" required>
+            <p class="text-muted" style="font-size:12px;margin-top:4px;">
+                任务截止日期前 N 天开始预警（默认 3 天，范围 1-30）
+            </p>
+        </div>
+
+        <div class="form-group">
+            <label>长期待激活预警天数</label>
+            <input type="number" name="warning_inactive_days" class="form-control"
+                   value="{{ warning_inactive_days }}" min="1" max="90" required>
+            <p class="text-muted" style="font-size:12px;margin-top:4px;">
+                任务创建后 N 天仍未启动时预警，每 N 天提醒一次（默认 7 天，范围 1-90）
+            </p>
+        </div>
+
+        <button type="submit" class="btn btn-primary">保存设置</button>
+    </form>
+</div>
+
+{# 当前配置概览 #}
+<div class="card" style="max-width:560px;">
+    <div class="card-title">当前运行参数</div>
+    <div class="detail-grid">
+        <div class="detail-field">
+            <span class="field-label">到期预警天数</span>
+            <span class="field-value">{{ warning_due_days }} 天</span>
+        </div>
+        <div class="detail-field">
+            <span class="field-label">待激活预警天数</span>
+            <span class="field-value">{{ warning_inactive_days }} 天</span>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

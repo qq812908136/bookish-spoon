@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="督办系统">
+  <defs>
+    <linearGradient id="logo-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <filter id="logo-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#1e3a8a" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#logo-bg)"/>
+  <!-- 督办清单：剪贴板 + 对勾 -->
+  <g fill="#ffffff" filter="url(#logo-shadow)">
+    <!-- 剪贴板主体 -->
+    <rect x="18" y="18" width="28" height="32" rx="4" fill-opacity="0.96"/>
+    <!-- 顶部夹子 -->
+    <rect x="26" y="12" width="12" height="8" rx="2.5"/>
+    <!-- 对勾（使用路径裁切实现，与品牌蓝形成对比） -->
+    <mask id="check-mask">
+      <rect x="18" y="18" width="28" height="32" rx="4" fill="white"/>
+    </mask>
+  </g>
+  <path d="M24 36 L30 42 L42 29" fill="none" stroke="#2563eb" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#logo-shadow)"/>
+</svg>

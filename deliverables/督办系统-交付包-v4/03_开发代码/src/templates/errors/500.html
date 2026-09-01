@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}服务器错误 - 督办系统{% endblock %}
+{% block content %}
+<div class="error-page" style="min-height:60vh;">
+    <div class="error-code">500</div>
+    <div class="error-message">抱歉，服务器出现内部错误</div>
+    <p class="text-muted mb-24">请稍后重试，或联系管理员查看日志。</p>
+    <a href="{{ url_for('dashboard.overview') }}" class="btn btn-primary">返回概览</a>
+</div>
+{% endblock %}

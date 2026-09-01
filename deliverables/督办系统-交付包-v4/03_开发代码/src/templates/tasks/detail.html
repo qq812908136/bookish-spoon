@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% block title %}{{ task['title'] }} - 督办系统{% endblock %}
+{% block content %}
+
+{# ============================================================
+   任务详情独立页（V2 保留：消息跳转 / JS 失效降级 / 浏览器直链场景）
+   抽屉内交互版见 /tasks/<id>/drawer；本页保留完整功能表单。
+   ============================================================ #}
+
+<div class="page-header">
+    <div style="min-width:0;">
+        <h1 class="page-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;">{{ task['title'] }}</span>
+            <span class="status-badge st-{{ task['status'] }}">{{ status_labels[task['status']] }}</span>
+        </h1>
+        <p class="text-muted" style="font-size:12px;margin-top:4px;">
+            创建人 {{ task['creator_name'] or '—' }} · {{ task['created_at']|format_datetime }}
+            · 最后更新 {{ task['updated_at']|time_ago }}
+        </p>
+    </div>
+    <div class="page-header-actions">
+        <a href="{{ url_for('task.task_list') }}" class="btn btn-secondary">{{ icon('list-checks', 15) }} 返回列表</a>
+    </div>
+</div>
+
+{# ============================================================ #}
+{# 基本信息卡片（V2 新增 3 字段：进度 / 协同方 / 风险点） #}
+{# ============================================================ #}
+<div class="card" style="margin-bottom:16px;">
+    <div class="panel-section-title">基本信息</div>
+
+    <div class="progress-lg" style="margin-bottom:18px;">
+        <div class="bar"><div class="fill" style="width: {{ task['progress_percent'] or 0 }}%;"></div></div>
+        <span class="pct">{{ task['progress_percent'] or 0 }}%</span>
+    </div>
+
+    <div class="detail-grid">
+        <div class="detail-field">
+            <span class="field-label">负责人</span>
+            <span class="field-value">{{ task['assignee_name'] or '未分配' }}</span>
+        </div>
+        <div class="detail-field">
+            <span class="field-label">优先级</span>
+            <span class="field-value"><span class="priority-pill {{ task['priority'] }}">{{ priority_labels[task['priority']] }}</span></span>
+        </div>
+        <div class="detail-field">
+            <span class="field-label">截止日期</span>
+            <span class="field-value" {% if task['status'] == 'overdue' %}style="color:var(--color-red);font-weight:500;"{% endif %}>
+                {{ task['due_date']|format_date }}
+            </span>
+        </div>
+        <div class="detail-field">
+            <span class="field-label">协同方</span>
+            <span class="field-value">{{ task['collaborators'] or '—' }}</span>
+        </div>
+        {% if task['closed_at'] %}
+        <div class="detail-field">
+            <span class="field-label">闭环时间</span>
+            <span class="field-value">{{ task['closed_at']|format_datetime }}</span>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if task['description'] %}
+    <div class="detail-field" style="margin-top:14px;">
+        <span class="field-label">工作要求</span>
+        <div class="field-value" style="white-space:pre-wrap;line-height:1.6;">{{ task['description'] }}</div>
+    </div>
+    {% endif %}
+
+    {% if task['risk_note'] %}
+    <div class="detail-field" style="margin-top:14px;">
+        <span class="field-label">风险点</span>
+        <div class="field-value" style="white-space:pre-wrap;line-height:1.6;color:var(--color-orange);">{{ task['risk_note'] }}</div>
+    </div>
+    {% endif %}
+</div>
+
+{# ============================================================ #}
+{# 过程证据 / 阻塞记录（只读展示；增删交互请用任务抽屉） #}
+{# ============================================================ #}
+<div class="dash-layout" style="margin-bottom:16px;">
+    <div class="card">
+        <div class="panel-section-title">{{ icon('file-text', 14) }} 过程证据（{{ evidence|length }}）</div>
+        {% if evidence %}
+            {% for ev in evidence %}
+            <div class="evidence-item">
+                <span class="ev-icon">
+                    {% if ev['etype'] == 'link' %}{{ icon('link', 16) }}
+                    {% elif ev['etype'] == 'file' %}{{ icon('file-text', 16) }}
+                    {% else %}{{ icon('pencil', 16) }}{% endif %}
+                </span>
+                <div class="ev-content">
+                    <div class="ev-text">
+                        {% if ev['etype'] == 'link' %}
+                        <a href="{{ ev['content'] }}" target="_blank" rel="noopener">{{ ev['content'] }}</a>
+                        {% else %}
+                        {{ ev['content'] }}
+                        {% endif %}
+                    </div>
+                    <div class="ev-meta">{{ evidence_type_labels[ev['etype']] }} · {{ ev['creator_name'] or '系统' }} · {{ ev['created_at']|format_datetime }}</div>
+                </div>
+                {# V2 批次 4：删除证据（仅管理员，普通 POST 表单 + 确认） #}
+                {% if current_user['role'] == 'admin' %}
+                <form action="{{ url_for('task.task_evidence_delete', task_id=task['task_id'], evidence_id=ev['evidence_id']) }}" method="POST"
+                      onsubmit="return confirm('确定要删除该证据吗？此操作不可撤销！');"
+                      style="flex-shrink:0;margin-left:8px;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-danger btn-sm" title="删除该证据">{{ icon('trash', 13) }}</button>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+        <p class="text-muted">暂无过程证据</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <div class="panel-section-title">{{ icon('alert-circle', 14) }} 阻塞记录（{{ blockers|length }}）</div>
+        {% if blockers %}
+            {% for bl in blockers %}
+            <div class="blocker-item {{ 'resolved' if bl['status'] == 'resolved' }}">
+                <span class="bl-icon">{{ icon('alert-circle', 16) if bl['status'] == 'open' else icon('check-circle', 16) }}</span>
+                <div class="bl-content">
+                    <div class="bl-text">{{ bl['content'] }}</div>
+                    <div class="bl-meta">
+                        {{ blocker_status_labels[bl['status']] }} · {{ bl['creator_name'] or '系统' }} · {{ bl['created_at']|format_datetime }}
+                        {% if bl['status'] == 'resolved' and bl['resolver_name'] %}
+                        · 由 {{ bl['resolver_name'] }} 解决
+                        {% endif %}
+                    </div>
+                </div>
+                {# V2 批次 4：删除阻塞（仅管理员，普通 POST 表单 + 确认） #}
+                {% if current_user['role'] == 'admin' %}
+                <form action="{{ url_for('task.task_blocker_delete', task_id=task['task_id'], blocker_id=bl['blocker_id']) }}" method="POST"
+                      onsubmit="return confirm('确定要删除该阻塞记录吗？此操作不可撤销！');"
+                      style="flex-shrink:0;margin-left:8px;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-danger btn-sm" title="删除该阻塞记录">{{ icon('trash', 13) }}</button>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+        <p class="text-muted">暂无阻塞记录</p>
+        {% endif %}
+    </div>
+</div>
+
+{# ============================================================ #}
+{# 编辑任务表单（仅有权编辑时显示） #}
+{# ============================================================ #}
+{% if can_edit %}
+<div class="card" style="margin-bottom:16px;">
+    <div class="panel-section-title">{{ icon('pencil', 14) }} 编辑任务</div>
+    <form action="{{ url_for('task.task_edit', task_id=task['task_id']) }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label>任务标题</label>
+            <input type="text" name="title" class="form-control" value="{{ task['title'] }}" maxlength="100" required>
+        </div>
+        <div class="form-group">
+            <label>工作要求/描述</label>
+            <textarea name="description" class="form-control" rows="4">{{ task['description'] or '' }}</textarea>
+        </div>
+        {# V2 批次 4：新增 3 字段（进度 / 协同方 / 风险点），校验口径与 task_field 一致 #}
+        <div class="detail-grid">
+            <div class="form-group">
+                <label>{{ icon('trending-up', 13) }} 进度（%）</label>
+                <input type="number" name="progress_percent" class="form-control"
+                       min="0" max="100" step="1" value="{{ task['progress_percent'] or 0 }}">
+            </div>
+            <div class="form-group">
+                <label>{{ icon('users', 13) }} 协同方</label>
+                <input type="text" name="collaborators" class="form-control" maxlength="500"
+                       value="{{ task['collaborators'] or '' }}" placeholder="协作部门/人员，如：财务部、王五">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>{{ icon('alert-circle', 13) }} 风险点说明</label>
+            <textarea name="risk_note" class="form-control" rows="3" maxlength="500"
+                      placeholder="任务推进中的风险点、卡点说明（选填）...">{{ task['risk_note'] or '' }}</textarea>
+        </div>
+        <div class="detail-grid">
+            <div class="form-group">
+                <label>优先级</label>
+                <select name="priority" class="form-control">
+                    {% for p in priorities %}
+                    <option value="{{ p }}" {% if task['priority'] == p %}selected{% endif %}>{{ priority_labels[p] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>截止日期</label>
+                <input type="date" name="due_date" class="form-control" value="{{ task['due_date']|format_date }}" required>
+            </div>
+        </div>
+        {% if current_user['role'] == 'admin' %}
+        <div class="form-group">
+            <label>负责人</label>
+            <select name="assignee" class="form-control">
+                {% for u in active_users %}
+                <option value="{{ u['user_id'] }}" {% if task['assignee'] == u['user_id'] %}selected{% endif %}>{{ u['display_name'] }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+        <button type="submit" class="btn btn-primary btn-sm">保存修改</button>
+        <span class="text-muted" style="margin-left:8px;font-size:12px;">更快捷的字段编辑请点击列表行，在抽屉中行内编辑</span>
+    </form>
+</div>
+{% endif %}
+
+{# ============================================================ #}
+{# 状态变更 + 进度提交（仅有权编辑时显示） #}
+{# ============================================================ #}
+{% if can_edit %}
+<div class="dash-layout" style="margin-bottom:16px;">
+    {% if allowed_transitions %}
+    <div class="card">
+        <div class="panel-section-title">{{ icon('play', 14) }} 变更状态</div>
+        <form action="{{ url_for('task.task_change_status', task_id=task['task_id']) }}" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-group">
+                <label>目标状态</label>
+                <select name="status" class="form-control">
+                    {% for t in allowed_transitions %}
+                    <option value="{{ t['status'] }}">{{ t['label'] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>进度备注 / 完成说明</label>
+                <textarea name="progress_note" class="form-control" rows="3"
+                          placeholder="填写进度说明或完成情况..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">确认变更</button>
+        </form>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <div class="panel-section-title">{{ icon('trending-up', 14) }} 更新进度</div>
+        <form action="{{ url_for('progress.submit_progress', task_id=task['task_id']) }}" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-group">
+                <label>进度备注</label>
+                <textarea name="progress_note" class="form-control" rows="3"
+                          placeholder="填写本次进度更新说明..." required></textarea>
+            </div>
+            <button type="submit" class="btn btn-secondary btn-sm">提交进度</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{# ============================================================ #}
+{# 进度记录时间线 #}
+{# ============================================================ #}
+<div class="card" style="margin-bottom:16px;">
+    <div class="panel-section-title">进度记录</div>
+    {% if logs %}
+    <ul class="timeline">
+        {% for log in logs %}
+        <li class="timeline-item">
+            <div class="timeline-meta">
+                <strong>{{ log['operator_name'] or '系统' }}</strong>
+                · {{ log['operated_at']|format_datetime }}
+                {% if log['status_from'] and log['status_to'] and log['status_from'] != log['status_to'] %}
+                · {{ status_labels[log['status_from']] }} → {{ status_labels[log['status_to']] }}
+                {% elif log['status_from'] and log['status_to'] and log['status_from'] == log['status_to'] %}
+                · 进度更新
+                {% elif not log['status_from'] and log['status_to'] %}
+                · {{ status_labels[log['status_to']] }}
+                {% endif %}
+            </div>
+            {% if log['progress_note'] %}
+            <div class="timeline-note">{{ log['progress_note'] }}</div>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-muted">暂无进度记录</p>
+    {% endif %}
+</div>
+
+{# ============================================================ #}
+{# 危险操作（仅管理员，仅已撤销任务） #}
+{# ============================================================ #}
+{% if can_delete %}
+<div class="card" style="border-color:var(--color-red-bg);margin-bottom:16px;">
+    <div class="panel-section-title" style="color:var(--color-red);">危险操作</div>
+    <form action="{{ url_for('task.task_delete', task_id=task['task_id']) }}" method="POST"
+          onsubmit="return confirm('确定要永久删除此任务吗？此操作不可撤销！');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-danger btn-sm">{{ icon('trash', 14) }} 永久删除此任务</button>
+        <span class="text-muted" style="margin-left:8px;font-size:12px;">仅已撤销任务可删除</span>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}

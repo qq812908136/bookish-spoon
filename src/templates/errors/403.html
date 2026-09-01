@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}权限不足 - 督办系统{% endblock %}
+{% block content %}
+<div class="error-page" style="min-height:60vh;">
+    <div class="error-code">403</div>
+    <div class="error-message">抱歉，您没有权限访问此页面</div>
+    <p class="text-muted mb-24">此操作需要管理员权限，或您只能操作自己负责的任务。</p>
+    <a href="{{ url_for('dashboard.overview') }}" class="btn btn-primary">返回概览</a>
+</div>
+{% endblock %}

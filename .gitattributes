@@ -1,0 +1,22 @@
+# ============ 换行符保护（关键）============
+# Windows 的 cmd.exe 用 GBK 解码、且要求 CRLF 换行。
+# 若 .bat/.cmd 被 Git 转成 LF，中文会乱码并被 cmd 当成命令执行而报错。
+# 这里强制检出时始终为 CRLF，无论开发者本机的 core.autocrlf 是什么。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 跨平台脚本保持 LF
+*.sh text eol=lf
+
+# ============ 二进制文件 ============
+# 显式声明，避免 Git 误判为文本做换行转换而损坏文件
+*.db binary
+*.zip binary
+*.pyz binary
+*.pyd binary
+*.dll binary
+*.exe binary
+*.png binary
+*.jpg binary
+*.ico binary

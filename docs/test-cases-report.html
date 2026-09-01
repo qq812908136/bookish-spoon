@@ -1,0 +1,1576 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>督办系统 - 测试用例报告（V2）</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f6f8; color: #1a1a2e; line-height: 1.7; }
+
+  /* 顶部摘要 */
+  .hero { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: #fff; padding: 48px 32px; }
+  .hero h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  .hero .subtitle { font-size: 15px; opacity: 0.85; margin-bottom: 28px; }
+  .stat-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .stat-card { background: rgba(255,255,255,0.15); border-radius: 12px; padding: 20px 28px; min-width: 140px; }
+  .stat-card .num { font-size: 32px; font-weight: 700; }
+  .stat-card .label { font-size: 13px; opacity: 0.8; margin-top: 4px; }
+  .stat-card.pass { background: rgba(34,197,94,0.25); }
+  .stat-card.pass .num { color: #4ade80; }
+
+  /* 内容区 */
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+
+  /* 目录 */
+  .toc { background: #fff; border-radius: 12px; padding: 24px 28px; margin-bottom: 32px; border: 1px solid #e5e7eb; }
+  .toc h2 { font-size: 16px; margin-bottom: 12px; color: #4f46e5; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin-bottom: 6px; font-size: 14px; }
+  .toc a { color: #4f46e5; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc .count { color: #9ca3af; font-size: 13px; }
+
+  /* V2 标记 */
+  .v2-badge { display: inline-flex; align-items: center; background: linear-gradient(135deg, #ec4899, #f43f5e); color: #fff; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 10px; margin-left: 8px; vertical-align: 2px; letter-spacing: 0.5px; }
+  .v2-badge::before { content: "✦ "; font-size: 10px; }
+
+  /* 分类区块 */
+  .category { background: #fff; border-radius: 12px; padding: 28px 28px; margin-bottom: 24px; border: 1px solid #e5e7eb; }
+  .category.v2-cat { border: 1px solid #fbcfe8; background: linear-gradient(180deg, #fff 0%, #fff5f9 100%); }
+  .category-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px solid #f0f0f5; }
+  .category-badge { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 10px; font-weight: 700; font-size: 15px; color: #fff; }
+  .category-title { font-size: 19px; font-weight: 700; }
+  .category-desc { font-size: 13px; color: #6b7280; margin-top: 2px; }
+  .category-count { margin-left: auto; font-size: 13px; color: #9ca3af; background: #f3f4f6; padding: 4px 12px; border-radius: 20px; }
+
+  /* 测试用例行 */
+  .test-row { display: flex; align-items: flex-start; gap: 12px; padding: 14px 0; border-bottom: 1px solid #f5f5f8; }
+  .test-row:last-child { border-bottom: none; }
+  .test-id { flex-shrink: 0; width: 56px; font-size: 12px; font-weight: 600; color: #9ca3af; font-family: "Consolas", monospace; padding-top: 2px; }
+  .test-body { flex: 1; }
+  .test-name { font-size: 14px; font-weight: 600; color: #1f2937; }
+  .test-desc { font-size: 13px; color: #6b7280; margin-top: 3px; }
+  .test-expected { font-size: 12px; color: #4b5563; margin-top: 4px; padding: 6px 10px; background: #f9fafb; border-radius: 6px; border-left: 3px solid #d1d5db; }
+  .test-expected strong { color: #374151; }
+  .test-status { flex-shrink: 0; }
+  .pass-badge { display: inline-flex; align-items: center; gap: 4px; background: #dcfce7; color: #166534; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+  .pass-badge::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #22c55e; }
+
+  /* 状态机表格 */
+  .transition-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+  .transition-table th { background: #f9fafb; padding: 8px 12px; text-align: left; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; }
+  .transition-table td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; }
+  .transition-table .legal { color: #166534; font-weight: 600; }
+  .transition-table .illegal { color: #991b1b; font-weight: 600; }
+  .transition-table .admin-only { color: #9333ea; font-weight: 600; }
+  .transition-table .auto { color: #2563eb; font-weight: 600; }
+
+  /* 图例 */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; font-size: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .legend-dot.legal { background: #22c55e; }
+  .legend-dot.illegal { background: #ef4444; }
+  .legend-dot.admin-only { background: #9333ea; }
+  .legend-dot.auto { background: #3b82f6; }
+
+  /* 变更说明框 */
+  .change-note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 16px 20px; margin: 20px 0; font-size: 13px; color: #92400e; }
+  .change-note strong { color: #78350f; }
+  .change-note ul { padding-left: 20px; margin-top: 6px; }
+  .change-note li { margin-bottom: 4px; }
+
+  /* 底部 */
+  .footer { text-align: center; padding: 32px; color: #9ca3af; font-size: 13px; }
+  .footer hr { border: none; border-top: 1px solid #e5e7eb; margin-bottom: 16px; max-width: 400px; margin-left: auto; margin-right: auto; }
+
+  @media (max-width: 640px) {
+    .hero { padding: 32px 20px; }
+    .stat-card { min-width: 100px; padding: 16px 20px; }
+    .stat-card .num { font-size: 24px; }
+    .container { padding: 20px 12px; }
+    .category { padding: 20px 16px; }
+    .test-row { flex-wrap: wrap; }
+    .test-id { width: auto; }
+    .test-status { width: 100%; margin-top: 8px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== 顶部摘要 ===== -->
+<div class="hero">
+  <h1>督办系统 — 测试用例报告（V2 迭代）</h1>
+  <div class="subtitle">Python + Flask + SQLite | QA 工程师：严过关 | 测试框架：unittest | V1 基线 87 项 + V2 新增 32 项</div>
+  <div class="stat-row">
+    <div class="stat-card pass"><div class="num">119</div><div class="label">总测试数</div></div>
+    <div class="stat-card pass"><div class="num">119</div><div class="label">通过</div></div>
+    <div class="stat-card"><div class="num">0</div><div class="label">失败</div></div>
+    <div class="stat-card"><div class="num">0</div><div class="label">错误</div></div>
+    <div class="stat-card pass"><div class="num">100%</div><div class="label">通过率</div></div>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ===== V2 变更说明 ===== -->
+<div class="change-note">
+  <strong>V2 迭代测试变更说明</strong>
+  <ul>
+    <li><strong>3 项 V1 用例断言按 V2 设计更新</strong>（设计变更，非 bug）：
+      <br>① E2E-01 第 10 步「消息中心页」：V2 改为 <strong>301 永久重定向到 /dashboard</strong>（消息中心由顶栏铃铛抽屉替代）；
+      <br>② E2E-02「错误密码登录」：V1 断言 200 + 页面报错 → V2 断言 <strong>401</strong> 状态码；
+      <br>③ E2E-03「停用账号登录」：V1 断言 200 + 页面报错 → V2 断言 <strong>401</strong> 状态码。</li>
+    <li><strong>新增 32 项 V2 用例</strong>（分组 10-17，标题带 <span class="v2-badge" style="vertical-align:0;">V2</span> 标记）：闭环率口径 / 时间范围筛选 / 闭环矩阵 / 行内编辑权限 / 证据阻塞 CRUD / 时间线留痕 / 抽屉路由 / 推送提醒 / 暗色模式 / 记住我与字段级错误 / 表单 3 字段。</li>
+    <li><strong>测试隔离增强</strong>：reset_database 补齐 evidence / blockers 两张 V2 新表的清理，避免任务 ID 复用导致的脏数据串扰。</li>
+    <li><strong>发现并修复 1 个产品小 bug</strong>：登录页「记住用户名」cookie 已保存但不会回填输入框（Jinja default 过滤器对已定义空串不回退），已修复 login.html 模板。</li>
+  </ul>
+</div>
+
+<!-- ===== 目录 ===== -->
+<div class="toc">
+  <h2>测试分类目录</h2>
+  <ol>
+    <li><a href="#cat1">数据库初始化测试</a> <span class="count">4 项</span></li>
+    <li><a href="#cat2">状态机转换测试</a> <span class="count">26 项</span></li>
+    <li><a href="#cat3">应用启动与路由测试</a> <span class="count">9 项</span></li>
+    <li><a href="#cat4">端到端功能测试</a> <span class="count">12 项（3 项断言按 V2 更新）</span></li>
+    <li><a href="#cat5">权限控制测试</a> <span class="count">11 项</span></li>
+    <li><a href="#cat6">分页测试</a> <span class="count">3 项</span></li>
+    <li><a href="#cat7">预警引擎测试</a> <span class="count">6 项</span></li>
+    <li><a href="#cat8">仪表盘统计测试</a> <span class="count">2 项</span></li>
+    <li><a href="#cat9">批量操作与 CSV 导出测试</a> <span class="count">14 项</span></li>
+    <li><a href="#cat10">仪表盘 V2 测试 <span class="v2-badge">V2</span></a> <span class="count">5 项</span></li>
+    <li><a href="#cat11">行内编辑测试 <span class="v2-badge">V2</span></a> <span class="count">5 项</span></li>
+    <li><a href="#cat12">过程证据与阻塞测试 <span class="v2-badge">V2</span></a> <span class="count">7 项</span></li>
+    <li><a href="#cat13">时间线留痕测试 <span class="v2-badge">V2</span></a> <span class="count">2 项</span></li>
+    <li><a href="#cat14">抽屉路由测试 <span class="v2-badge">V2</span></a> <span class="count">4 项</span></li>
+    <li><a href="#cat15">推送提醒测试 <span class="v2-badge">V2</span></a> <span class="count">3 项</span></li>
+    <li><a href="#cat16">登录页与暗色模式测试 <span class="v2-badge">V2</span></a> <span class="count">3 项</span></li>
+    <li><a href="#cat17">表单 3 字段测试 <span class="v2-badge">V2</span></a> <span class="count">3 项</span></li>
+  </ol>
+</div>
+
+<!-- ===== 1. 数据库初始化 ===== -->
+<div class="category" id="cat1">
+  <div class="category-header">
+    <span class="category-badge" style="background:#3b82f6;">1</span>
+    <div>
+      <div class="category-title">数据库初始化测试</div>
+      <div class="category-desc">验证建表、索引、默认配置是否正确写入</div>
+    </div>
+    <span class="category-count">4 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DB-01</div>
+    <div class="test-body">
+      <div class="test-name">五张表全部创建</div>
+      <div class="test-desc">检查 sqlite_master 中是否存在 users / tasks / progress_logs / messages / system_config 五张表</div>
+      <div class="test-expected"><strong>预期：</strong>五张表全部存在，无缺失</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DB-02</div>
+    <div class="test-body">
+      <div class="test-name">十个索引全部创建</div>
+      <div class="test-desc">检查 idx_tasks_status / idx_tasks_assignee / idx_tasks_due_date / idx_tasks_is_overdue / idx_tasks_created_by / idx_logs_task_id / idx_logs_operated_at / idx_messages_recipient / idx_messages_is_read / idx_messages_created 共 10 个索引</div>
+      <div class="test-expected"><strong>预期：</strong>10 个索引全部存在，无缺失</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DB-03</div>
+    <div class="test-body">
+      <div class="test-name">默认配置数据写入</div>
+      <div class="test-desc">验证 system_config 表中的默认值：warning_due_days=3, warning_inactive_days=7, scan_interval_seconds=300, warning_scan_time=09:00</div>
+      <div class="test-expected"><strong>预期：</strong>四项默认配置全部正确</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DB-04</div>
+    <div class="test-body">
+      <div class="test-name">init_db 幂等性</div>
+      <div class="test-desc">先插入一条用户数据，再次调用 init_db()，验证已有数据不被破坏（V2 迁移幂等：老库自动补 evidence/blockers 表与 tasks 3 新列）</div>
+      <div class="test-expected"><strong>预期：</strong>重复初始化后用户数据仍存在</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 2. 状态机 ===== -->
+<div class="category" id="cat2">
+  <div class="category-header">
+    <span class="category-badge" style="background:#8b5cf6;">2</span>
+    <div>
+      <div class="category-title">状态机转换测试</div>
+      <div class="category-desc">5 态状态机：待启动 → 进行中 → 已逾期 → 已闭环 → 已撤销</div>
+    </div>
+    <span class="category-count">26 项</span>
+  </div>
+
+  <!-- 状态转换矩阵 -->
+  <div class="legend">
+    <div class="legend-item"><span class="legend-dot legal"></span> 合法转换</div>
+    <div class="legend-item"><span class="legend-dot illegal"></span> 非法转换（拒绝）</div>
+    <div class="legend-item"><span class="legend-dot admin-only"></span> 仅管理员</div>
+    <div class="legend-item"><span class="legend-dot auto"></span> 系统自动触发</div>
+  </div>
+  <table class="transition-table">
+    <thead>
+      <tr><th>当前状态</th><th>目标状态</th><th>操作人</th><th>结果</th><th>对应测试</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>待启动</td><td>进行中</td><td>任意</td><td class="legal">合法</td><td>SM-01</td></tr>
+      <tr><td>待启动</td><td>已闭环</td><td>任意</td><td class="legal">合法</td><td>SM-02</td></tr>
+      <tr><td>待启动</td><td>已撤销</td><td>任意</td><td class="legal">合法</td><td>SM-03</td></tr>
+      <tr><td>待启动</td><td>已逾期</td><td>—</td><td class="illegal">非法（手动）</td><td>SM-11</td></tr>
+      <tr><td>进行中</td><td>已闭环</td><td>任意</td><td class="legal">合法</td><td>SM-04</td></tr>
+      <tr><td>进行中</td><td>已撤销</td><td>任意</td><td class="legal">合法</td><td>SM-05</td></tr>
+      <tr><td>进行中</td><td>待启动</td><td>—</td><td class="illegal">非法</td><td>SM-12</td></tr>
+      <tr><td>已逾期</td><td>进行中</td><td>任意</td><td class="legal">合法</td><td>SM-06</td></tr>
+      <tr><td>已逾期</td><td>已闭环</td><td>任意</td><td class="legal">合法</td><td>SM-07</td></tr>
+      <tr><td>已逾期</td><td>已撤销</td><td>任意</td><td class="legal">合法</td><td>SM-08</td></tr>
+      <tr><td>已闭环</td><td>进行中</td><td>仅管理员</td><td class="admin-only">管理员专属</td><td>SM-09 / SM-15</td></tr>
+      <tr><td>已闭环</td><td>已撤销</td><td>—</td><td class="illegal">非法</td><td>SM-13</td></tr>
+      <tr><td>已撤销</td><td>待启动</td><td>仅管理员</td><td class="admin-only">管理员专属</td><td>SM-10 / SM-16</td></tr>
+      <tr><td>任意</td><td>同状态</td><td>—</td><td class="illegal">非法</td><td>SM-14</td></tr>
+    </tbody>
+  </table>
+
+  <h4 style="margin: 20px 0 8px; font-size: 14px; color: #374151;">合法转换（10 项）</h4>
+
+  <div class="test-row">
+    <div class="test-id">SM-01</div>
+    <div class="test-body">
+      <div class="test-name">待启动 → 进行中</div>
+      <div class="test-desc">负责人启动任务，状态从 pending 变为 in_progress</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-02</div>
+    <div class="test-body">
+      <div class="test-name">待启动 → 已闭环</div>
+      <div class="test-desc">任务未启动直接闭环（如快速完成的任务）</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-03</div>
+    <div class="test-body">
+      <div class="test-name">待启动 → 已撤销</div>
+      <div class="test-desc">任务创建后取消</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-04</div>
+    <div class="test-body">
+      <div class="test-name">进行中 → 已闭环</div>
+      <div class="test-desc">任务完成后闭环</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-05</div>
+    <div class="test-body">
+      <div class="test-name">进行中 → 已撤销</div>
+      <div class="test-desc">任务进行中取消</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-06</div>
+    <div class="test-body">
+      <div class="test-name">已逾期 → 进行中</div>
+      <div class="test-desc">逾期任务恢复推进</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-07</div>
+    <div class="test-body">
+      <div class="test-name">已逾期 → 已闭环</div>
+      <div class="test-desc">逾期任务最终完成闭环</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-08</div>
+    <div class="test-body">
+      <div class="test-name">已逾期 → 已撤销</div>
+      <div class="test-desc">逾期任务取消</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-09</div>
+    <div class="test-body">
+      <div class="test-name">已闭环 → 进行中（管理员重新打开）</div>
+      <div class="test-desc">管理员将已闭环任务重新打开为进行中（返工）</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-10</div>
+    <div class="test-body">
+      <div class="test-name">已撤销 → 待启动（管理员恢复）</div>
+      <div class="test-desc">管理员恢复已撤销的任务为待启动状态</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <h4 style="margin: 20px 0 8px; font-size: 14px; color: #374151;">非法转换（4 项）</h4>
+
+  <div class="test-row">
+    <div class="test-id">SM-11</div>
+    <div class="test-body">
+      <div class="test-name">待启动 → 已逾期（手动触发应拒绝）</div>
+      <div class="test-desc">已逾期状态应由系统后台扫描自动触发，不允许手动设置</div>
+      <div class="test-expected"><strong>预期：</strong>validate_transition 返回 False</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-12</div>
+    <div class="test-body">
+      <div class="test-name">进行中 → 待启动（不允许回退）</div>
+      <div class="test-desc">任务一旦启动不允许回退到待启动状态</div>
+      <div class="test-expected"><strong>预期：</strong>validate_transition 返回 False</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-13</div>
+    <div class="test-body">
+      <div class="test-name">已闭环 → 已撤销（不允许）</div>
+      <div class="test-desc">终态之间不允许转换</div>
+      <div class="test-expected"><strong>预期：</strong>validate_transition 返回 False</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-14</div>
+    <div class="test-body">
+      <div class="test-name">相同状态转换（不允许）</div>
+      <div class="test-desc">待启动 → 待启动 应被拒绝</div>
+      <div class="test-expected"><strong>预期：</strong>validate_transition 返回 False</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <h4 style="margin: 20px 0 8px; font-size: 14px; color: #374151;">权限校验（2 项）</h4>
+
+  <div class="test-row">
+    <div class="test-id">SM-15</div>
+    <div class="test-body">
+      <div class="test-name">负责人不能重新打开已闭环任务</div>
+      <div class="test-desc">owner 尝试 closed → in_progress 应被拒绝，提示"需要管理员权限"</div>
+      <div class="test-expected"><strong>预期：</strong>返回 False，reason 包含"管理员"</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-16</div>
+    <div class="test-body">
+      <div class="test-name">负责人不能恢复已撤销任务</div>
+      <div class="test-desc">owner 尝试 cancelled → pending 应被拒绝</div>
+      <div class="test-expected"><strong>预期：</strong>返回 False，reason 包含"管理员"</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <h4 style="margin: 20px 0 8px; font-size: 14px; color: #374151;">可转换列表查询（3 项）</h4>
+
+  <div class="test-row">
+    <div class="test-id">SM-17</div>
+    <div class="test-body">
+      <div class="test-name">负责人在已闭环状态下无可转换状态</div>
+      <div class="test-desc">get_allowed_transitions('closed', 'owner') 应返回空列表</div>
+      <div class="test-expected"><strong>预期：</strong>返回 []</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-18</div>
+    <div class="test-body">
+      <div class="test-name">管理员在已闭环状态下可看到"进行中"</div>
+      <div class="test-desc">get_allowed_transitions('closed', 'admin') 应包含 in_progress</div>
+      <div class="test-expected"><strong>预期：</strong>返回列表包含 in_progress</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-19</div>
+    <div class="test-body">
+      <div class="test-name">待启动状态有 3 个可转换状态</div>
+      <div class="test-desc">get_allowed_transitions('pending', 'owner') 应返回 {in_progress, closed, cancelled}</div>
+      <div class="test-expected"><strong>预期：</strong>恰好 3 个可转换状态</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <h4 style="margin: 20px 0 8px; font-size: 14px; color: #374151;">状态变更副作用（7 项）</h4>
+
+  <div class="test-row">
+    <div class="test-id">SM-20</div>
+    <div class="test-body">
+      <div class="test-name">状态变更应写入进度日志</div>
+      <div class="test-desc">pending → in_progress 后，progress_logs 表应有 1 条记录，包含 status_from=pending, status_to=in_progress, progress_note</div>
+      <div class="test-expected"><strong>预期：</strong>日志数量=1，字段值正确</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-21</div>
+    <div class="test-body">
+      <div class="test-name">闭环时应记录 closed_at 时间</div>
+      <div class="test-desc">任务变为 closed 后，closed_at 字段不应为空</div>
+      <div class="test-expected"><strong>预期：</strong>task.closed_at 不为 None</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-22</div>
+    <div class="test-body">
+      <div class="test-name">重新打开时应清空 closed_at</div>
+      <div class="test-desc">先闭环再由管理员重新打开，closed_at 应变为 None，status 变为 in_progress</div>
+      <div class="test-expected"><strong>预期：</strong>closed_at = None, status = in_progress</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-23</div>
+    <div class="test-body">
+      <div class="test-name">状态变更应通知任务创建人</div>
+      <div class="test-desc">owner 变更任务状态后，admin（创建人）应收到 1 条 type=status_change 的消息，内容包含新状态名</div>
+      <div class="test-expected"><strong>预期：</strong>admin 收到 1 条状态变更消息</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-24</div>
+    <div class="test-body">
+      <div class="test-name">自建自负责的任务不给自己发消息</div>
+      <div class="test-desc">创建人=负责人的任务，状态变更后不应给自己发通知</div>
+      <div class="test-expected"><strong>预期：</strong>消息数=0</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-25</div>
+    <div class="test-body">
+      <div class="test-name">从逾期恢复应清除 is_overdue 标记</div>
+      <div class="test-desc">overdue → in_progress 后，is_overdue 字段应变为 0</div>
+      <div class="test-expected"><strong>预期：</strong>is_overdue = 0</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">SM-26</div>
+    <div class="test-body">
+      <div class="test-name">变更不存在的任务应返回失败</div>
+      <div class="test-desc">task_id=99999 不存在，change_task_status 应返回 False</div>
+      <div class="test-expected"><strong>预期：</strong>返回 False，reason 包含"不存在"</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 3. 应用启动与路由 ===== -->
+<div class="category" id="cat3">
+  <div class="category-header">
+    <span class="category-badge" style="background:#06b6d4;">3</span>
+    <div>
+      <div class="category-title">应用启动与路由测试</div>
+      <div class="category-desc">Flask 应用创建、蓝图注册、路由可访问性</div>
+    </div>
+    <span class="category-count">9 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-01</div>
+    <div class="test-body">
+      <div class="test-name">Flask 应用成功创建</div>
+      <div class="test-desc">create_app() 返回的 app 对象不为 None</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-02</div>
+    <div class="test-body">
+      <div class="test-name">7 个蓝图全部注册</div>
+      <div class="test-desc">验证 app.blueprints 包含 auth / task / progress / message / user / settings / dashboard</div>
+      <div class="test-expected"><strong>预期：</strong>7 个蓝图全部存在</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-03</div>
+    <div class="test-body">
+      <div class="test-name">无管理员时根路由重定向到初始化向导</div>
+      <div class="test-desc">GET / 在无管理员时应返回 302，Location 包含 /setup</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-04</div>
+    <div class="test-body">
+      <div class="test-name">有管理员时根路由重定向到登录</div>
+      <div class="test-desc">创建管理员后 GET / 应返回 302，Location 包含 /login</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-05</div>
+    <div class="test-body">
+      <div class="test-name">登录页面可访问</div>
+      <div class="test-desc">GET /login 返回 200</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-06</div>
+    <div class="test-body">
+      <div class="test-name">初始化向导页面可访问</div>
+      <div class="test-desc">GET /setup 返回 200（无管理员时）</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-07</div>
+    <div class="test-body">
+      <div class="test-name">未登录访问任务列表被重定向</div>
+      <div class="test-desc">GET /tasks 未登录时返回 302，Location 包含 /login</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-08</div>
+    <div class="test-body">
+      <div class="test-name">未登录访问仪表盘被重定向</div>
+      <div class="test-desc">GET /dashboard 未登录时返回 302，Location 包含 /login</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">APP-09</div>
+    <div class="test-body">
+      <div class="test-name">404 错误处理器已注册</div>
+      <div class="test-desc">GET /nonexistent-page 返回 404</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 4. 端到端 ===== -->
+<div class="category" id="cat4">
+  <div class="category-header">
+    <span class="category-badge" style="background:#f59e0b;">4</span>
+    <div>
+      <div class="category-title">端到端功能测试</div>
+      <div class="category-desc">模拟真实用户操作，覆盖完整业务流程（含 3 项按 V2 设计更新的断言）</div>
+    </div>
+    <span class="category-count">12 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-01</div>
+    <div class="test-body">
+      <div class="test-name">完整业务流程（18 步串行）<span class="v2-badge">断言已按 V2 更新</span></div>
+      <div class="test-desc">访问首页 → 创建管理员 → 登录 → 仪表盘 → 任务列表 → 创建任务 → 查看详情 → 变更状态 → 提交进度 → 消息中心 → 标记已读 → 发送消息 → 修改个人设置 → 修改系统设置 → 新增用户 → 用户管理页 → 登出 → 登出后访问受保护页面</div>
+      <div class="test-expected"><strong>预期（V2）：</strong>第 10 步消息中心 GET /messages 返回 <strong>301 永久重定向到 /dashboard</strong>（消息中心由顶栏铃铛抽屉替代），其余步骤状态码与 V1 一致</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-02</div>
+    <div class="test-body">
+      <div class="test-name">错误密码登录失败 <span class="v2-badge">断言已按 V2 更新</span></div>
+      <div class="test-desc">用错误密码登录，登录页返回通用错误提示（不暴露账号是否存在）</div>
+      <div class="test-expected"><strong>预期（V2）：</strong>状态码 <strong>401</strong>，页面包含"错误"提示（V1 为 200 + 页面报错）</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-03</div>
+    <div class="test-body">
+      <div class="test-name">停用用户不能登录 <span class="v2-badge">断言已按 V2 更新</span></div>
+      <div class="test-desc">用户被管理员停用后，用正确密码也无法登录</div>
+      <div class="test-expected"><strong>预期（V2）：</strong>状态码 <strong>401</strong>，页面包含"错误"提示（V1 为 200 + 页面报错）</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-04</div>
+    <div class="test-body">
+      <div class="test-name">负责人创建任务只能指派给自己</div>
+      <div class="test-desc">owner 创建任务时尝试指派给 admin，系统应强制将负责人设为 owner 自己</div>
+      <div class="test-expected"><strong>预期：</strong>task.assignee = owner_id</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-05</div>
+    <div class="test-body">
+      <div class="test-name">管理员指派任务生成指派消息</div>
+      <div class="test-desc">admin 创建任务指派给 owner，owner 应收到 type=assignment 的消息</div>
+      <div class="test-expected"><strong>预期：</strong>owner 消息数 &gt; 0，type = assignment</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-06</div>
+    <div class="test-body">
+      <div class="test-name">全部标记已读</div>
+      <div class="test-desc">owner 有 2 条以上未读消息，点击"全部已读"后未读数归零</div>
+      <div class="test-expected"><strong>预期：</strong>API 返回 success=true，未读数=0</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-07</div>
+    <div class="test-body">
+      <div class="test-name">未读消息数 API</div>
+      <div class="test-desc">GET /messages/unread-count 返回 JSON，count &gt; 0</div>
+      <div class="test-expected"><strong>预期：</strong>status=200，JSON 含 count &gt;= 1</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-08</div>
+    <div class="test-body">
+      <div class="test-name">管理员停用/启用用户</div>
+      <div class="test-desc">POST /users/{id}/toggle 切换用户激活状态</div>
+      <div class="test-expected"><strong>预期：</strong>is_active 从 1 变为 0</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-09</div>
+    <div class="test-body">
+      <div class="test-name">管理员重置用户密码</div>
+      <div class="test-desc">POST /users/{id}/reset-password 设置新密码，用户用新密码可登录</div>
+      <div class="test-expected"><strong>预期：</strong>用新密码登录返回 302（成功）</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-10</div>
+    <div class="test-body">
+      <div class="test-name">进度记录 JSON 接口</div>
+      <div class="test-desc">GET /tasks/{id}/logs 返回 JSON 格式的进度日志列表</div>
+      <div class="test-expected"><strong>预期：</strong>status=200，JSON 含 success=true，data 长度 &gt;= 1</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-11</div>
+    <div class="test-body">
+      <div class="test-name">仅允许删除已撤销的任务</div>
+      <div class="test-desc">尝试删除 pending 状态任务 → 被拒绝；撤销后删除 → 成功</div>
+      <div class="test-expected"><strong>预期：</strong>pending 不被删除，cancelled 后删除成功</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">E2E-12</div>
+    <div class="test-body">
+      <div class="test-name">编辑任务字段</div>
+      <div class="test-desc">POST /tasks/{id}/edit 修改标题、描述、优先级、截止日期</div>
+      <div class="test-expected"><strong>预期：</strong>字段值全部更新成功</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 5. 权限 ===== -->
+<div class="category" id="cat5">
+  <div class="category-header">
+    <span class="category-badge" style="background:#ef4444;">5</span>
+    <div>
+      <div class="category-title">权限控制测试</div>
+      <div class="category-desc">未登录拦截、角色隔离（admin vs owner）、数据级权限</div>
+    </div>
+    <span class="category-count">11 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-01</div>
+    <div class="test-body">
+      <div class="test-name">未登录访问 /tasks 被拦截</div>
+      <div class="test-desc">GET /tasks 未登录时返回 302 重定向到 /login</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-02</div>
+    <div class="test-body">
+      <div class="test-name">未登录访问 /dashboard 被拦截</div>
+      <div class="test-desc">GET /dashboard 未登录时返回 302 重定向到 /login</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-03</div>
+    <div class="test-body">
+      <div class="test-name">未登录访问 /messages 被拦截</div>
+      <div class="test-desc">GET /messages 未登录时返回 302 重定向到 /login</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-04</div>
+    <div class="test-body">
+      <div class="test-name">负责人访问用户管理页返回 403</div>
+      <div class="test-desc">owner 登录后 GET /users 应返回 403 权限不足</div>
+      <div class="test-expected"><strong>预期：</strong>状态码 403</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-05</div>
+    <div class="test-body">
+      <div class="test-name">负责人访问系统设置返回 403</div>
+      <div class="test-desc">owner 登录后 GET /settings/system 应返回 403</div>
+      <div class="test-expected"><strong>预期：</strong>状态码 403</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-06</div>
+    <div class="test-body">
+      <div class="test-name">负责人访问发消息页返回 403</div>
+      <div class="test-desc">owner 登录后 GET /messages/send 应返回 403（仅管理员可主动发消息）</div>
+      <div class="test-expected"><strong>预期：</strong>状态码 403</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-07</div>
+    <div class="test-body">
+      <div class="test-name">负责人不能编辑他人的任务</div>
+      <div class="test-desc">owner2 尝试编辑 owner1 负责的任务，标题不应被修改</div>
+      <div class="test-expected"><strong>预期：</strong>任务标题保持不变</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-08</div>
+    <div class="test-body">
+      <div class="test-name">负责人不能删除任务</div>
+      <div class="test-desc">owner 尝试 POST /tasks/{id}/delete 应返回 403</div>
+      <div class="test-expected"><strong>预期：</strong>状态码 403</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-09</div>
+    <div class="test-body">
+      <div class="test-name">负责人不能变更他人任务状态</div>
+      <div class="test-desc">owner1 尝试变更 owner2 负责的任务状态，状态不应改变</div>
+      <div class="test-expected"><strong>预期：</strong>task.status 保持 pending 不变</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-10</div>
+    <div class="test-body">
+      <div class="test-name">管理员可以编辑任何人的任务</div>
+      <div class="test-desc">admin 修改指派给 owner 的任务标题和优先级</div>
+      <div class="test-expected"><strong>预期：</strong>字段更新成功</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PERM-11</div>
+    <div class="test-body">
+      <div class="test-name">负责人可以查看所有任务列表（Q4 决策）</div>
+      <div class="test-desc">owner 登录后 GET /tasks，应能看到 admin 创建的任务（只读权限）</div>
+      <div class="test-expected"><strong>预期：</strong>页面包含其他人的任务标题</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 6. 分页 ===== -->
+<div class="category" id="cat6">
+  <div class="category-header">
+    <span class="category-badge" style="background:#10b981;">6</span>
+    <div>
+      <div class="category-title">分页测试</div>
+      <div class="category-desc">C1 决策：每页 20 条，支持翻页</div>
+    </div>
+    <span class="category-count">3 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PAGE-01</div>
+    <div class="test-body">
+      <div class="test-name">25 条任务分页正确</div>
+      <div class="test-desc">创建 25 条任务：第 1 页 20 条，第 2 页 5 条，第 3 页 0 条</div>
+      <div class="test-expected"><strong>预期：</strong>page1=20, page2=5, page3=0, total=25</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PAGE-02</div>
+    <div class="test-body">
+      <div class="test-name">Web 界面分页验证</div>
+      <div class="test-desc">通过浏览器 GET /tasks?page=1 和 ?page=2，验证页面内容不重叠</div>
+      <div class="test-expected"><strong>预期：</strong>第 1 页含 01-20，第 2 页含 21-25，无交叉</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">PAGE-03</div>
+    <div class="test-body">
+      <div class="test-name">无效页码回退到第 1 页</div>
+      <div class="test-desc">page=0、page=-1、page=abc 均不报错，回退到第 1 页</div>
+      <div class="test-expected"><strong>预期：</strong>三种无效页码均返回 200</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 7. 预警 ===== -->
+<div class="category" id="cat7">
+  <div class="category-header">
+    <span class="category-badge" style="background:#f97316;">7</span>
+    <div>
+      <div class="category-title">预警引擎测试</div>
+      <div class="category-desc">三层预警：即将到期 / 已逾期 / 长期待激活，含去重机制</div>
+    </div>
+    <span class="category-count">6 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">WARN-01</div>
+    <div class="test-body">
+      <div class="test-name">第一层：即将到期预警</div>
+      <div class="test-desc">创建 2 天后到期的 pending 任务（在 3 天预警窗口内），执行预警扫描后 owner 应收到 warning_due 消息</div>
+      <div class="test-expected"><strong>预期：</strong>owner 收到 &gt;= 1 条 warning_due 消息</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">WARN-02</div>
+    <div class="test-body">
+      <div class="test-name">第二层：已逾期预警（双通知）</div>
+      <div class="test-desc">创建已逾期任务，扫描后 owner 和 admin 都应收到 warning_overdue 消息</div>
+      <div class="test-expected"><strong>预期：</strong>owner 和 admin 各收到 &gt;= 1 条逾期预警</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">WARN-03</div>
+    <div class="test-body">
+      <div class="test-name">第三层：长期待激活预警</div>
+      <div class="test-desc">创建 7 天前创建的 pending 任务，扫描后 owner 应收到 warning_inactive 消息</div>
+      <div class="test-expected"><strong>预期：</strong>owner 收到 &gt;= 1 条 warning_inactive 消息</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">WARN-04</div>
+    <div class="test-body">
+      <div class="test-name">预警去重：同一天不重复发送</div>
+      <div class="test-desc">对同一任务连续执行两次预警扫描，第二次不应新增消息</div>
+      <div class="test-expected"><strong>预期：</strong>两次扫描后消息数相等</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">WARN-05</div>
+    <div class="test-body">
+      <div class="test-name">终态任务不触发预警</div>
+      <div class="test-desc">已闭环的任务即使即将到期也不应触发预警</div>
+      <div class="test-expected"><strong>预期：</strong>warning 类型消息数 = 0</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">WARN-06</div>
+    <div class="test-body">
+      <div class="test-name">自动逾期触发预警</div>
+      <div class="test-desc">任务被系统自动标记为逾期时，trigger_overdue_warning 应同时通知 owner 和 admin</div>
+      <div class="test-expected"><strong>预期：</strong>owner 和 admin 各收到 &gt;= 1 条消息</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 8. 仪表盘（V1） ===== -->
+<div class="category" id="cat8">
+  <div class="category-header">
+    <span class="category-badge" style="background:#6366f1;">8</span>
+    <div>
+      <div class="category-title">仪表盘统计测试</div>
+      <div class="category-desc">验证 V1 仪表盘统计数据准确性</div>
+    </div>
+    <span class="category-count">2 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DASH-01</div>
+    <div class="test-body">
+      <div class="test-name">空数据库仪表盘统计</div>
+      <div class="test-desc">无任何任务时，仪表盘 total / pending / overdue 均为 0</div>
+      <div class="test-expected"><strong>预期：</strong>total=0, pending=0, overdue=0</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DASH-02</div>
+    <div class="test-body">
+      <div class="test-name">有数据时仪表盘统计</div>
+      <div class="test-desc">创建 5 条任务覆盖全部状态（待启动/进行中/已逾期/已闭环/已撤销），验证各状态计数和"我的待办"</div>
+      <div class="test-expected"><strong>预期：</strong>total=4（不含 cancelled）, pending=1, in_progress=1, overdue=1, closed=1, cancelled=1, my_pending=3</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 9. 批量操作与 CSV 导出 ===== -->
+<div class="category" id="cat9">
+  <div class="category-header">
+    <span class="category-badge" style="background:#0ea5e9;">9</span>
+    <div>
+      <div class="category-title">批量操作与 CSV 导出测试</div>
+      <div class="category-desc">P1-003 批量改状态/批量指派 + P1-004 CSV 导出（V1 报告遗漏分组，本次补齐）</div>
+    </div>
+    <span class="category-count">14 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EXP-01</div>
+    <div class="test-body">
+      <div class="test-name">未登录导出被拦截</div>
+      <div class="test-desc">GET /tasks/export 未登录时返回 302 重定向到 /login</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EXP-02</div>
+    <div class="test-body">
+      <div class="test-name">导出返回 CSV 附件</div>
+      <div class="test-desc">登录后导出返回 text/csv 附件（utf-8-sig 带 BOM），Content-Disposition 双 fallback（ASCII filename + RFC 5987 中文名），含中文表头与数据行，状态/负责人用中文</div>
+      <div class="test-expected"><strong>预期：</strong>200，attachment 头正确，含"任务ID/标题/负责人/是否逾期"表头与任务数据</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EXP-03</div>
+    <div class="test-body">
+      <div class="test-name">带筛选条件导出</div>
+      <div class="test-desc">GET /tasks/export?status=in_progress 只导出进行中的任务</div>
+      <div class="test-expected"><strong>预期：</strong>只含 in_progress 任务，不含其他状态</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-01</div>
+    <div class="test-body">
+      <div class="test-name">未登录批量操作被拦截</div>
+      <div class="test-desc">POST /tasks/batch 未登录时返回 302 重定向到 /login</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-02</div>
+    <div class="test-body">
+      <div class="test-name">未选任务应提示错误</div>
+      <div class="test-desc">POST /tasks/batch 不带 task_ids 时 flash 错误并重定向回列表</div>
+      <div class="test-expected"><strong>预期：</strong>302 重定向，任务状态不变</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-03</div>
+    <div class="test-body">
+      <div class="test-name">非法批量操作类型</div>
+      <div class="test-desc">action=unknown_action 时 flash 错误</div>
+      <div class="test-expected"><strong>预期：</strong>302 重定向，任务不变</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-04</div>
+    <div class="test-body">
+      <div class="test-name">admin 批量改状态</div>
+      <div class="test-desc">admin 选中 4 条任务批量改为已撤销，全部成功</div>
+      <div class="test-expected"><strong>预期：</strong>4 条任务状态均变为 cancelled</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-05</div>
+    <div class="test-body">
+      <div class="test-name">owner 批量改状态只对自己生效</div>
+      <div class="test-desc">owner1 选中自己的 2 条 + 他人 2 条批量改状态：自己的成功，他人的被跳过</div>
+      <div class="test-expected"><strong>预期：</strong>自己的 2 条变更，他人 2 条不变</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-06</div>
+    <div class="test-body">
+      <div class="test-name">非法目标状态不中断整体</div>
+      <div class="test-desc">批量改状态中含非法转换（closed→cancelled）时，该条失败但其余照常执行</div>
+      <div class="test-expected"><strong>预期：</strong>非法转换任务保持 closed，合法任务成功变更</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-07</div>
+    <div class="test-body">
+      <div class="test-name">admin 批量指派负责人</div>
+      <div class="test-desc">admin 把 2 条任务从 owner1 批量转给 owner2，并生成指派消息</div>
+      <div class="test-expected"><strong>预期：</strong>负责人变更成功，owner2 收到 &gt;= 2 条指派消息</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-08</div>
+    <div class="test-body">
+      <div class="test-name">owner 不能批量指派</div>
+      <div class="test-desc">owner 尝试批量指派应被拒绝（仅管理员可操作）</div>
+      <div class="test-expected"><strong>预期：</strong>负责人不变</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">BATCH-09</div>
+    <div class="test-body">
+      <div class="test-name">批量指派到不存在的负责人失败</div>
+      <div class="test-desc">new_assignee=99999 时操作失败，负责人不变</div>
+      <div class="test-expected"><strong>预期：</strong>负责人保持原值</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">UI-01</div>
+    <div class="test-body">
+      <div class="test-name">列表页含导出链接</div>
+      <div class="test-desc">/tasks 页面应包含"导出 CSV"链接指向 /tasks/export</div>
+      <div class="test-expected"><strong>预期：</strong>页面含导出链接</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">UI-02</div>
+    <div class="test-body">
+      <div class="test-name">列表页含批量操作表单</div>
+      <div class="test-desc">/tasks 页面应包含 batch-form、全选复选框、批量改状态选项；admin 还应看到批量指派选项</div>
+      <div class="test-expected"><strong>预期：</strong>批量表单元素齐全</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 10. 仪表盘 V2 ===== -->
+<div class="category v2-cat" id="cat10">
+  <div class="category-header">
+    <span class="category-badge" style="background:#ec4899;">10</span>
+    <div>
+      <div class="category-title">仪表盘 V2 测试 <span class="v2-badge">V2</span></div>
+      <div class="category-desc">闭环率口径（撤销不计分母）、时间范围筛选、闭环矩阵聚合、今日督办焦点</div>
+    </div>
+    <span class="category-count">5 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">D2-01</div>
+    <div class="test-body">
+      <div class="test-name">闭环率口径：撤销任务不计入分母</div>
+      <div class="test-desc">创建 2 待启动 + 2 已闭环 + 1 已撤销任务：任务总数 = 5 − 1 = 4，闭环率 = 2/4 = 0.5；另验证全部任务撤销时分母为 0，闭环率为 None（模板显示 —）</div>
+      <div class="test-expected"><strong>预期：</strong>total=4, closed=2, closure_rate=0.5；全撤销时 total=0 且 closure_rate=None</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">D2-02</div>
+    <div class="test-body">
+      <div class="test-name">时间范围筛选与非法值回落</div>
+      <div class="test-desc">创建 10 天前的旧任务 + 今日新任务：all 范围统计 2 条；week（本周，周一零点起）只统计 1 条；非法 range 键回落到 all 口径</div>
+      <div class="test-expected"><strong>预期：</strong>all=2, week=1, 非法键=2（按任务 created_at 过滤）</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">D2-03</div>
+    <div class="test-body">
+      <div class="test-name">仪表盘页面 ?range= 时间范围视图</div>
+      <div class="test-desc">GET /dashboard?range=week 的今日督办焦点只含本周创建的任务；?range=all 含全部</div>
+      <div class="test-expected"><strong>预期：</strong>本周视图含新任务、不含本周前旧任务；全部视图两条都在</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">D2-04</div>
+    <div class="test-body">
+      <div class="test-name">闭环矩阵按负责人聚合</div>
+      <div class="test-desc">张三 2 待启动 + 1 已闭环；李四 1 已闭环 + 1 已撤销。验证矩阵每行的任务数/各状态数/闭环率/排序（任务数降序）</div>
+      <div class="test-expected"><strong>预期：</strong>张三 total=3, closed=1, closure_rate≈0.3333；李四 total=1（撤销不计）, closure_rate=1.0；张三排前</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">D2-05</div>
+    <div class="test-body">
+      <div class="test-name">今日督办焦点排序与"我的"标记</div>
+      <div class="test-desc">焦点列表只取非终态任务，排序为已逾期 → 进行中 → 待启动；当前用户负责的任务标记 is_mine</div>
+      <div class="test-expected"><strong>预期：</strong>焦点不含已闭环/已撤销；排序正确；自己的任务 is_mine=True，他人的为 False</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 11. 行内编辑 V2 ===== -->
+<div class="category v2-cat" id="cat11">
+  <div class="category-header">
+    <span class="category-badge" style="background:#f43f5e;">11</span>
+    <div>
+      <div class="category-title">行内编辑测试 <span class="v2-badge">V2</span></div>
+      <div class="category-desc">POST /tasks/{id}/field（JSON）：admin 改任意任务 / owner 只能改自己的 / owner 改他人 403</div>
+    </div>
+    <span class="category-count">5 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">FE-01</div>
+    <div class="test-body">
+      <div class="test-name">admin 可行内编辑任意任务</div>
+      <div class="test-desc">admin 修改 owner 任务标题成功；修改负责人 owner1→owner2 成功且新负责人收到指派通知</div>
+      <div class="test-expected"><strong>预期：</strong>200 + success=true，字段落库，新负责人收到 assignment 消息</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">FE-02</div>
+    <div class="test-body">
+      <div class="test-name">owner 可编辑自己任务的四个字段</div>
+      <div class="test-desc">owner 对自己负责的任务依次修改 title / progress_percent / risk_note / collaborators</div>
+      <div class="test-expected"><strong>预期：</strong>四次请求均 200，progress 回显 60，四个字段全部正确落库</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">FE-03</div>
+    <div class="test-body">
+      <div class="test-name">owner 行内编辑他人任务返回 403</div>
+      <div class="test-desc">owner2 尝试修改 owner1 负责的任务标题</div>
+      <div class="test-expected"><strong>预期：</strong>403 + success=false，标题保持不变</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">FE-04</div>
+    <div class="test-body">
+      <div class="test-name">字段校验与任务不存在</div>
+      <div class="test-desc">进度 150 → 400；空白标题 → 400；白名单外字段（status）→ 400 且状态不被篡改；任务 99999 → 404</div>
+      <div class="test-expected"><strong>预期：</strong>越界/非法值全部 400 拒绝，任务字段不被污染，不存在任务 404</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">FE-05</div>
+    <div class="test-body">
+      <div class="test-name">owner 不能行内修改负责人</div>
+      <div class="test-desc">owner 尝试通过 field 接口把自己的任务转给他人</div>
+      <div class="test-expected"><strong>预期：</strong>403（仅管理员可修改负责人），assignee 不变</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 12. 证据与阻塞 V2 ===== -->
+<div class="category v2-cat" id="cat12">
+  <div class="category-header">
+    <span class="category-badge" style="background:#14b8a6;">12</span>
+    <div>
+      <div class="category-title">过程证据与阻塞测试 <span class="v2-badge">V2</span></div>
+      <div class="category-desc">证据/阻塞 CRUD 与权限：添加（owner 自己任务）、删除（仅 admin）、错位/不存在 404</div>
+    </div>
+    <span class="category-count">7 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EB-01</div>
+    <div class="test-body">
+      <div class="test-name">owner 给自己任务添加证据</div>
+      <div class="test-desc">POST /tasks/{id}/evidence（etype=link）成功，证据落库且类型/内容/创建人正确</div>
+      <div class="test-expected"><strong>预期：</strong>200 + success=true，evidence 表 1 条记录字段正确</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EB-02</div>
+    <div class="test-body">
+      <div class="test-name">owner 给他人任务添加证据返回 403</div>
+      <div class="test-desc">owner1 尝试给 owner2 的任务添加证据</div>
+      <div class="test-expected"><strong>预期：</strong>403，证据不落库</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EB-03</div>
+    <div class="test-body">
+      <div class="test-name">添加证据非法输入</div>
+      <div class="test-desc">非法证据类型（video）→ 400；空白内容 → 400；任务不存在 → 404</div>
+      <div class="test-expected"><strong>预期：</strong>三种非法场景分别返回 400/400/404</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EB-04</div>
+    <div class="test-body">
+      <div class="test-name">阻塞添加与解决完整流程</div>
+      <div class="test-desc">添加阻塞（初始 open）→ 创建者标记解决（status=resolved，resolved_by 记录）→ 重复解决 400 → admin 可解决他人创建的阻塞</div>
+      <div class="test-expected"><strong>预期：</strong>各状态与操作人字段正确，重复解决被拒</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EB-05</div>
+    <div class="test-body">
+      <div class="test-name">阻塞解决权限与 404</div>
+      <div class="test-desc">非创建者非 admin 解决他人阻塞 → 403（状态保持 open）；不存在的阻塞 → 404；通过错误任务 URL 解决 → 404</div>
+      <div class="test-expected"><strong>预期：</strong>403/404/404，阻塞状态不被越权修改</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EB-06</div>
+    <div class="test-body">
+      <div class="test-name">删除证据权限矩阵</div>
+      <div class="test-desc">owner 删除（含自己任务上）→ 403 且证据仍在；admin 通过错误任务 URL 删除 → 404；不存在的证据 ID → 404；admin 正确删除 → 200 且证据消失</div>
+      <div class="test-expected"><strong>预期：</strong>仅 admin 且证据归属正确时删除成功（200 JSON），其余 403/404</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">EB-07</div>
+    <div class="test-body">
+      <div class="test-name">删除阻塞权限矩阵</div>
+      <div class="test-desc">owner 删除阻塞 → 403 且记录仍在；admin 删除 → 200 且记录消失</div>
+      <div class="test-expected"><strong>预期：</strong>删除仅 admin 可操作</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 13. 时间线留痕 V2 ===== -->
+<div class="category v2-cat" id="cat13">
+  <div class="category-header">
+    <span class="category-badge" style="background:#a855f7;">13</span>
+    <div>
+      <div class="category-title">时间线留痕测试 <span class="v2-badge">V2</span></div>
+      <div class="category-desc">证据/阻塞操作写入 progress_logs（设计文档 §4.4：全程留痕）</div>
+    </div>
+    <span class="category-count">2 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">TL-01</div>
+    <div class="test-body">
+      <div class="test-name">添加/删除证据均写入进度日志</div>
+      <div class="test-desc">owner 添加证据后 progress_logs 出现"添加证据（文字）：…"记录（status_from/status_to 均为 None 的纯备注型日志，operator 为操作人）；admin 删除证据后出现"删除证据"记录</div>
+      <div class="test-expected"><strong>预期：</strong>添加与删除各产生 1 条时间线记录，内容含证据摘要</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">TL-02</div>
+    <div class="test-body">
+      <div class="test-name">添加阻塞写入进度日志</div>
+      <div class="test-desc">owner 添加阻塞后 progress_logs 出现"添加阻塞：…"记录</div>
+      <div class="test-expected"><strong>预期：</strong>1 条时间线记录，内容含阻塞描述</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 14. 抽屉路由 V2 ===== -->
+<div class="category v2-cat" id="cat14">
+  <div class="category-header">
+    <span class="category-badge" style="background:#eab308;">14</span>
+    <div>
+      <div class="category-title">抽屉路由测试 <span class="v2-badge">V2</span></div>
+      <div class="category-desc">任务详情抽屉 / Owner 抽屉 / 消息抽屉（顶栏铃铛交互的 HTML 片段接口）</div>
+    </div>
+    <span class="category-count">4 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DR-01</div>
+    <div class="test-body">
+      <div class="test-name">任务详情抽屉片段</div>
+      <div class="test-desc">GET /tasks/{id}/drawer 返回纯 HTML 片段（无 DOCTYPE/顶栏等整页结构），含任务标题与"过程证据/阻塞记录"页签</div>
+      <div class="test-expected"><strong>预期：</strong>200，片段结构正确，含任务标题</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DR-02</div>
+    <div class="test-body">
+      <div class="test-name">Owner 抽屉片段（admin 视角）</div>
+      <div class="test-desc">GET /tasks/owner/{uid}/drawer 返回负责人信息 + 该负责人任务列表片段；admin 视角可见"推送提醒"按钮（指向 /tasks/remind）</div>
+      <div class="test-expected"><strong>预期：</strong>200，含负责人姓名、任务标题、推送提醒按钮</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DR-03</div>
+    <div class="test-body">
+      <div class="test-name">消息抽屉片段</div>
+      <div class="test-desc">GET /messages/drawer 返回最近消息片段（最近 50 条），含消息关联的任务标题</div>
+      <div class="test-expected"><strong>预期：</strong>200，片段含指派消息的任务标题</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DR-04</div>
+    <div class="test-body">
+      <div class="test-name">抽屉路由异常场景</div>
+      <div class="test-desc">未登录访问 3 个抽屉路由均 302 到 /login；登录后任务抽屉/Owner 抽屉访问不存在的 ID 均 404</div>
+      <div class="test-expected"><strong>预期：</strong>未登录 302，资源不存在 404</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 15. 推送提醒 V2 ===== -->
+<div class="category v2-cat" id="cat15">
+  <div class="category-header">
+    <span class="category-badge" style="background:#3b82f6;">15</span>
+    <div>
+      <div class="category-title">推送提醒测试 <span class="v2-badge">V2</span></div>
+      <div class="category-desc">POST /tasks/remind：admin 发站内督办提醒（task_id / owner_id 两种方式）</div>
+    </div>
+    <span class="category-count">3 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">RM-01</div>
+    <div class="test-body">
+      <div class="test-name">按 task_id 推送提醒</div>
+      <div class="test-desc">admin 携带 task_id 调用 /tasks/remind，任务负责人收到 type=admin_directive 的站内信，内容含任务标题，关联 task_id 与 sender 正确</div>
+      <div class="test-expected"><strong>预期：</strong>200 + success=true，负责人收到 1 条督办提醒</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">RM-02</div>
+    <div class="test-body">
+      <div class="test-name">按 owner_id 推送提醒</div>
+      <div class="test-desc">admin 携带 owner_id 调用 /tasks/remind，该负责人收到泛化督办提醒消息</div>
+      <div class="test-expected"><strong>预期：</strong>200，负责人收到 1 条含"督办提醒"的消息</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">RM-03</div>
+    <div class="test-body">
+      <div class="test-name">推送提醒异常场景</div>
+      <div class="test-desc">owner 调用 → 403 且不产生消息；admin 缺少参数 → 400；task_id 不存在 → 404</div>
+      <div class="test-expected"><strong>预期：</strong>403/400/404，越权调用不落消息</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 16. 登录页与暗色模式 V2 ===== -->
+<div class="category v2-cat" id="cat16">
+  <div class="category-header">
+    <span class="category-badge" style="background:#64748b;">16</span>
+    <div>
+      <div class="category-title">登录页与暗色模式测试 <span class="v2-badge">V2</span></div>
+      <div class="category-desc">记住我 cookie、字段级错误提示、暗色模式切换机制（html.dark 类）</div>
+    </div>
+    <span class="category-count">3 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">DM-01</div>
+    <div class="test-body">
+      <div class="test-name">暗色模式切换机制存在</div>
+      <div class="test-desc">登录后页面含 theme-toggle 切换按钮；内联脚本通过 localStorage('db-theme') 持久化偏好并向 html 根元素挂 dark 类（防闪烁）</div>
+      <div class="test-expected"><strong>预期：</strong>页面含 theme-toggle / db-theme / classList.add('dark')</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">LG-01</div>
+    <div class="test-body">
+      <div class="test-name">记住用户名 cookie 全流程</div>
+      <div class="test-desc">勾选"记住我"登录 → Set-Cookie 写入 remember_username（30 天）；携带 cookie 访问登录页 → 用户名回填且复选框预勾选；不勾选登录 → cookie 被清除</div>
+      <div class="test-expected"><strong>预期：</strong>cookie 写入/回填/清除行为全部正确（回填行为依赖本次修复的 login.html 模板 bug）</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">LG-02</div>
+    <div class="test-body">
+      <div class="test-name">登录字段级错误提示</div>
+      <div class="test-desc">空用户名提交 → 400 + "请输入用户名"红字定位到用户名输入框（has-error）；空密码提交 → 400 + "请输入密码"定位到密码框</div>
+      <div class="test-expected"><strong>预期：</strong>两种空字段场景均 400 且错误定位到具体字段</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+<!-- ===== 17. 表单 3 字段 V2 ===== -->
+<div class="category v2-cat" id="cat17">
+  <div class="category-header">
+    <span class="category-badge" style="background:#22c55e;">17</span>
+    <div>
+      <div class="category-title">表单 3 字段测试 <span class="v2-badge">V2</span></div>
+      <div class="category-desc">新建/编辑任务携带 progress_percent / risk_note / collaborators</div>
+    </div>
+    <span class="category-count">3 项</span>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">TF-01</div>
+    <div class="test-body">
+      <div class="test-name">新建任务携带 3 字段保存成功</div>
+      <div class="test-desc">POST /tasks/new 携带 progress_percent=30、risk_note、collaborators，创建成功后三字段正确落库</div>
+      <div class="test-expected"><strong>预期：</strong>302 跳转列表，task.progress_percent=30，risk_note/collaborators 值一致</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">TF-02</div>
+    <div class="test-body">
+      <div class="test-name">新建任务进度 150 被拒绝</div>
+      <div class="test-desc">POST /tasks/new 携带 progress_percent=150，表单校验失败重新渲染并提示"进度必须在 0-100 之间"，任务不被创建</div>
+      <div class="test-expected"><strong>预期：</strong>200 重新渲染表单 + 错误提示，任务表无新增</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+
+  <div class="test-row">
+    <div class="test-id">TF-03</div>
+    <div class="test-body">
+      <div class="test-name">编辑任务更新 3 字段</div>
+      <div class="test-desc">POST /tasks/{id}/edit 携带新的 progress_percent=80、risk_note、collaborators，保存后三字段更新</div>
+      <div class="test-expected"><strong>预期：</strong>302，三个字段值全部更新成功</div>
+    </div>
+    <div class="test-status"><span class="pass-badge">通过</span></div>
+  </div>
+</div>
+
+</div>
+
+<!-- ===== 底部 ===== -->
+<div class="footer">
+  <hr>
+  <p>督办系统测试用例报告（V2 迭代） &nbsp;|&nbsp; 共 119 项测试，全部通过（V1 基线 87 项 + V2 新增 32 项）</p>
+  <p>测试文件：test_suite.py &nbsp;|&nbsp; 测试框架：Python unittest &nbsp;|&nbsp; 隔离测试库：test_data/test_supervision.db</p>
+  <p>QA 工程师：严过关 &nbsp;|&nbsp; 生成日期：2026-08-28</p>
+</div>
+
+</body>
+</html>
