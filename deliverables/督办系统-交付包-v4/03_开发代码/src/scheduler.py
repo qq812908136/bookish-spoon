@@ -14,6 +14,7 @@ from datetime import datetime
 
 import config
 import db
+import mail_dispatcher
 import models
 import warning_engine
 from state_machine import TaskStatus
@@ -56,6 +57,15 @@ def _overdue_scan_loop(app):
                 _scan_and_mark_overdue(app)
             except Exception as e:
                 app.logger.error(f'逾期扫描异常: {e}')
+
+            # 邮件队列扫描（V4）：与逾期扫描共用同一个 5 分钟循环，
+            # 不新增线程（C4-②）。未配置邮件时 scan_and_send 会立即返回，
+            # 不会有任何额外开销（B5-① 静默降级）。
+            try:
+                mail_dispatcher.scan_and_send()
+            except Exception as e:
+                app.logger.error(f'邮件队列扫描异常: {e}')
+
             # 读取配置的扫描间隔（默认 300 秒 = 5 分钟）
             interval = int(models.get_config('scan_interval_seconds', str(config.OVERDUE_SCAN_INTERVAL)))
             time.sleep(interval)

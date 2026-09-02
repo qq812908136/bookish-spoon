@@ -255,6 +255,8 @@ def register_context_processors(app):
     - warning_due_days / warning_inactive_days: 当前预警配置
     - password_min_length: 密码最小长度（取自 config，避免前端把数字写死后
       与后端配置脱节——改了 PASSWORD_MIN_LENGTH，提示文案自动跟着变）
+    - static_version: 静态资源缓存串，模板里 url_for(..., v=static_version)
+      用它；集中在此处，改 CSS/JS 后只需改 config.STATIC_VERSION 一处
     - csrf_token: 当前会话的 CSRF 令牌，模板里塞进表单 hidden 字段
     """
 
@@ -283,6 +285,7 @@ def register_context_processors(app):
             'warning_due_days': models.get_config('warning_due_days', str(config.DEFAULT_WARNING_DUE_DAYS)),
             'warning_inactive_days': models.get_config('warning_inactive_days', str(config.DEFAULT_WARNING_INACTIVE_DAYS)),
             'password_min_length': config.PASSWORD_MIN_LENGTH,
+            'static_version': config.STATIC_VERSION,
             # CSRF 令牌：关闭防护时给空串，模板里不会渲染出 hidden 字段
             'csrf_token': csrf.generate_csrf_token() if config.CSRF_ENABLED else '',
         }

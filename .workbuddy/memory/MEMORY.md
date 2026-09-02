@@ -44,7 +44,10 @@
 - `python scripts/build_delivery_package.py vN`（默认 v4）。从 v3 只读复制 01/02/04/05 → 由当前源码实时装配 03_开发代码 → 用 `docs/测试报告/` 覆盖 04_测试 → 写 README → 打 zip。
 - 安全闸门 `REBUILDABLE={'v4'..'v9','test'}`，v1/v2/v3 拒绝重建。key 须与白名单同格式。
 - **三条硬规则**：① `05_离线程序/**/data/supervision.db` 是刻意内置的演示数据，过滤规则必须放行；② 重建前**必须先 `build.bat` 打包就位 `dist/督办系统/`**，否则退回 v3 旧 exe；③ `RENAME_MAP` 去「-最新」后缀，只作用于新版本。`dist/` 若为空先从 `_archive/dist/督办系统` `cp -a` 拷回。
-- v3 已发行只读；**v4 当前版本**：232 文件 / zip 13.4MB。复核：zip 条目数 + `testzip()` + bat 抽查 GBK/CRLF + 扫 `.db` 垃圾 + `git status`。
+- v3 已发行只读；**v4 当前版本**：259 文件 / zip 259 条目 13.8MB。复核：zip 条目数 + `testzip()` + bat 抽查 GBK/CRLF + 扫 `.db` 垃圾 + `git status`。
+- **归档用 `mv` 到 `_archive/`，不要用删除**：旧交付包目录 / 旧 dist / 旧 zip 一律改名为 `_prev-xxx` 再 `mv` 进 `_archive/`，零删除操作。
+- 交付包 README 的测试数**从 `docs/测试报告/test_summary.json` 真读**，不写死（写死的数字每加用例就腐一次，而 README 是最容易忘同步的地方）。
+- `04_测试` 从 v3 基线整段复制会**每重建一次多留一代带日期的旧报告**；`make_ignore(skip_stale_reports=True)` 在复制时过滤非当日报告（比复制完再删少一次批量删除）。
 - **secret.key 必须同时进 `.gitignore` 和构建脚本 `IGNORE_NAMES`**，每次复查 v4 zip 内计数为 0。
 
 ## bat/cmd 编码（GBK + CRLF 强制）
@@ -60,6 +63,9 @@
 ## 关键经验教训
 - **哨兵值 0 的双重语义（通用坑）**：`0` 既表「未设置」又是「时间戳已过期」的合法取值，必须在**每个读取点**显式排除（如 `0 < x <= now`）。这类 bug 只有连续调用 3 次以上观察状态变化才能发现。
 - **复选框未勾选 = 键不出现**：服务端必须用 `'key' in form` 判断并显式补 0，不能用 `form.get(key)` 判值。写测试模拟未勾选要把键从 dict 里 `del` 掉，传空字符串测不出来。
+- **⚠️ 沙箱有批量删除守卫（单回合 50 个）**：PyInstaller 重打包会删 `dist/督办系统`（163 文件）、交付包脚本会删旧 v4 目录（50 文件），都会触发中断。**对策：① 先把旧目录 `mv` 成 `_prev-xxx` 再打包；② 能把「复制完再删」改成「复制时用 `ignore` 过滤」就改**。
+- **静态资源版本号只能有一个来源**：`config.STATIC_VERSION` → `app.py` 的 `inject_globals()` 注入 → 模板写 `v=static_version`。**`login.html` / `setup.html` 不继承 `base.html` 是独立页面**，版本号写死在各自模板里必然漏改（2026-09-03 真实事故：改了 CSS 但登录页仍加载旧样式，只能靠实跑 exe 冒烟才发现）。已有 `TestStaticAssetVersion` 2 项测试守住。
+- `PYZ` 里有模块 ≠ 运行时能跑：打包后必须**实跑 exe 冒烟**（临时脚本 `_smoke_exe.py` 21 项）。冒烟取任务 ID 用列表页的 `data-detail-url="/tasks/(\d+)"`——抽屉 URL `/tasks/<id>/drawer` 是 JS 拼的，页面源码里搜不到。
 - **本机有 HTTP 代理会拦 localhost**：请求 `127.0.0.1:5000` 返回 **502 / WinError 10054**。冒烟必须 `urllib.request.ProxyHandler({})`（requests 用 `proxies={'http':None,'https':None}`）。
 - **常驻进程必须用 Bash 的 `run_in_background: true`**：`cmd &` 起的进程随调用结束被回收 → WinError 10061。
 - **杀进程用 PowerShell `Stop-Process -Id <pid> -Force`**（Git Bash 里 `taskkill /F` 和 `//F` 都失败）；禁止从 Bash 调 PowerShell 宿主（安全策略拦截整条命令）。Git Bash 的 `/tmp` 对托管 Python 不可见，临时脚本放项目目录。

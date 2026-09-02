@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}我的邮件记录 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div class="page-header-left">
+        <h1 class="page-title">我的邮件记录</h1>
+        <span class="page-hint">仅显示系统发往你邮箱的邮件。邮箱地址与订阅等级在「个人设置」中修改。</span>
+    </div>
+    <div class="page-header-actions">
+        <a href="{{ url_for('settings.profile') }}" class="btn btn-secondary btn-sm">去个人设置</a>
+    </div>
+</div>
+
+<div class="card" style="max-width:900px;">
+    <div class="card-title">接收设置</div>
+    <div class="detail-grid">
+        <div class="detail-field">
+            <span class="field-label">我的邮箱</span>
+            <span class="field-value">{{ current_user['email'] if current_user['email'] else '未填写（收不到邮件）' }}</span>
+        </div>
+        <div class="detail-field">
+            <span class="field-label">订阅等级</span>
+            <span class="field-value">
+                {{ notify_level_labels.get(current_user['mail_notify_level'] or 'overdue', '仅逾期') }}
+            </span>
+        </div>
+    </div>
+    <p class="text-muted" style="font-size:12px;margin-top:10px;">
+        无论订阅等级如何，任务分配通知与人工提醒都会送达；等级只影响系统自动预警邮件的范围。
+    </p>
+</div>
+
+<div class="card" style="max-width:900px;">
+    <div class="card-title">发送记录（共 {{ total }} 条）</div>
+
+    {% if logs %}
+    <table class="user-table mail-table">
+        <thead>
+            <tr>
+                <th style="width:150px;">时间</th>
+                <th style="width:110px;">类型</th>
+                <th>主题</th>
+                <th style="width:80px;">结果</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+            <tr>
+                <td>{{ log['finished_at'] or log['created_at'] }}</td>
+                <td>{{ mail_type_labels.get(log['mail_type'], log['mail_type']) }}</td>
+                <td title="{{ log['subject'] }}">{{ log['subject'] }}</td>
+                <td>
+                    <span class="status-badge {{ 'green' if log['success'] else 'red' }}">
+                        {{ '成功' if log['success'] else '失败' }}
+                    </span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if total_pages > 1 %}
+    <div class="mail-pager">
+        {% if page > 1 %}
+        <a href="{{ url_for('mail.my_mails', page=page-1) }}" class="btn btn-secondary btn-sm">上一页</a>
+        {% endif %}
+        <span class="text-muted" style="font-size:12px;">第 {{ page }} / {{ total_pages }} 页</span>
+        {% if page < total_pages %}
+        <a href="{{ url_for('mail.my_mails', page=page+1) }}" class="btn btn-secondary btn-sm">下一页</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <p class="text-muted">还没有收到过系统邮件。</p>
+    {% endif %}
+</div>
+
+{% endblock %}

@@ -18,6 +18,7 @@
 """
 import os
 import sys
+import json
 import shutil
 import zipfile
 import datetime
@@ -71,18 +72,28 @@ OFFLINE_BATS = (
 )
 
 
-def make_ignore(keep_demo_db=False):
+def make_ignore(keep_demo_db=False, skip_stale_reports=False):
     """生成 shutil.copytree 的 ignore 回调。
 
     keep_demo_db=True 时保留 `05_离线程序/**/data/supervision.db`：
     那是刻意内置进离线包的演示数据（9 用户 / 45 任务），不是运行产物，
     丢掉会让离线包启动后进入初始化向导而非直接可演示。
+
+    skip_stale_reports=True 时跳过「非当日」的带日期测试报告
+    （`督办系统-测试用例-YYYY-MM-DD.md` / `督办系统-测试用例报告-YYYY-MM-DD.html`）。
+    04_测试 是整段从基线复制的，报告文件名又带日期，于是每重建一次就多留一代
+    旧的，拿到包的人分不清该看哪份。**在复制时过滤，而不是复制完再删**——
+    后者每次构建都要动删除操作，既慢又容易触发批量删除守卫。
     """
     def _ignore(path, names):
         out = set()
         in_offline = keep_demo_db and '05_离线程序' in path.replace('\\', '/')
         for n in names:
             if n in IGNORE_NAMES:
+                out.add(n)
+            elif skip_stale_reports and (
+                    n.startswith('督办系统-测试用例-')
+                    or n.startswith('督办系统-测试用例报告-')) and DATE not in n:
                 out.add(n)
             elif n.endswith(IGNORE_SUFFIX):
                 if in_offline and n == 'supervision.db' \
@@ -122,14 +133,15 @@ def safe_rmtree(path):
         pass
 
 
-def copy_tree(src, dst, label, keep_demo_db=False):
+def copy_tree(src, dst, label, keep_demo_db=False, skip_stale_reports=False):
     """二进制复制目录树，返回复制的文件数。"""
     if not os.path.exists(src):
         print(f'  [跳过] {label}: 源不存在 {src}')
         return 0
     if os.path.exists(dst):
         safe_rmtree(dst)
-    shutil.copytree(src, dst, ignore=make_ignore(keep_demo_db))
+    shutil.copytree(src, dst,
+                    ignore=make_ignore(keep_demo_db, skip_stale_reports))
     n = sum(len(fns) for _, _, fns in os.walk(dst))
     print(f'  [OK]   {label}: {n} 个文件  <- {os.path.relpath(src, PROJECT_DIR)}')
     return n
@@ -337,8 +349,15 @@ README = """# 督办系统 — 交付包 {VER}（{DATE} 整理）
 ├── 03_开发代码/        Flask 源码（src/）+ 测试（tests/）+ 脚本（scripts/）+ 启动脚本
 ├── 04_测试/           测试用例、测试报告（HTML/Markdown）、缺陷清单、报告生成器
 ├── 05_离线程序/        免环境依赖的 Windows 离线程序（含 督办系统.exe）
+├── 演示指引.md          演示流程脚本（5 分钟走完一遍）
+├── 督办系统-邮件功能配置指南.md   管理员配置邮件通知的操作手册（V4 新增）
+├── 督办系统-生产部署指南.md       正式上线步骤（WSGI + HTTPS + 备份）
 └── README.md          本说明
 ```
+
+> **三份使用者文档放在根目录**：`01/02` 面向评审、`03/04` 面向开发，
+> 而「怎么演示、怎么配邮件、怎么上线」是**用这套系统的人**要查的，
+> 塞进任何一段都会让真正需要它的人找不到。
 
 ## 二、两种运行方式
 
@@ -356,19 +375,35 @@ README = """# 督办系统 — 交付包 {VER}（{DATE} 整理）
 
 ## 三、{VER} 相较 {BASE} 的变更
 
-**结构性变更：源码目录改为 `src/` 分层**（源码、测试、脚本、文档分区），数据库仍在 `data/`。
+V4 有两类改动：**源码分层重构**（结构）与**新增邮件通知功能**（业务）。
+
+### 3.1 结构：源码目录改为 `src/` 分层（源码、测试、脚本、文档分区），数据库仍在 `data/`
 
 | 变更项 | 说明 |
 |---|---|
 | `src/` 分层 | 10 个 Python 模块（含 csrf.py）+ `routes/` + `templates/` + `static/` 统一收入 `src/` |
-| `tests/` | `test_suite.py`（161 项）与 `generate_test_report.py` 从根目录移入 |
+| `tests/` | `test_suite.py` 与 `generate_test_report.py` 从根目录移入 |
 | `scripts/` | `build_delivery_package.py` 从根目录移入，路径改为基于 `__file__` 推导 |
 | `docs/` | 根目录散落文档（改动待办清单、overview-*.md 等）统一收拢 |
 | 路径推导 | `src/config.py`：`BASE_DIR` = 项目根（挂 `data/`），`BUNDLE_DIR` = `src/`（挂模板/静态） |
 | 打包入口 | `督办系统.spec` 入口改为 `src/app.py`；`build.bat` 改为直接调用 spec，不再重复写参数 |
 | 补齐脚本 | 仓库根补齐 `清除数据.bat`、`灌入演示数据.bat`（此前只存在于交付包中） |
 
-> 业务代码与页面功能**未做任何改动**，仅调整目录位置与路径推导；全量测试通过后才生成本包。
+### 3.2 功能：新增邮件通知通道（站内信之外的第二触达）
+
+| 能力 | 说明 |
+|---|---|
+| 触发场景 | 任务分配/改派、逾期提醒、即将到期、长期待激活、管理员每日 09:00 日报、任务页手动提醒 |
+| 默认关闭 | `MAIL_ENABLED` 默认 `false`——**不配置就一封不发**，与 {BASE} 行为完全一致 |
+| 发送方式 | 邮件先落库进队列，复用现有 5 分钟扫描循环发送，不新增线程 |
+| 防打扰 | 同一负责人的多个逾期任务合并成一封；管理员只收日报；每轮限量 20 封 |
+| 失败处理 | 按 5/15/30 分钟指数退避重试（最多 3 次）；失败件在页面列出原因并支持一键重发 |
+| 熔断保护 | 认证失败（授权码错）立即熔断并需人工恢复，避免大量失败登录导致发件邮箱被封号 |
+| 个人订阅 | 每人可选「不接收 / 仅逾期 / 逾期+即将到期 / 全部」，并查看「发给我的」记录 |
+| 隐私 | SMTP 授权码加密入库、不入页面与日志；用户邮箱仅本人与管理员可见 |
+| 数据库 | 幂等迁移，老库直接升级即可，**不需要重新初始化** |
+
+> 上手步骤、常见邮箱 SMTP 参数表与排障手册见根目录 **`督办系统-邮件功能配置指南.md`**。
 
 ## 四、默认演示账号（演示后请改密 / 清理）
 
@@ -385,7 +420,9 @@ README = """# 督办系统 — 交付包 {VER}（{DATE} 整理）
 - **上线前安全整改进度**（详见 `04_测试/上线前待办.md`）：
   - ✅ DEF-001 SECRET_KEY 硬编码 —— 已修复，改为首次启动自动生成并落盘，不随包分发。
   - 🟡 DEF-004 监听 0.0.0.0 —— 代码侧已修复（默认收回 `127.0.0.1`）；WSGI 与 HTTPS 需在部署时按 `docs/生产部署指南.md` 执行。
-  - ✅ DEF-002 无 CSRF —— 已修复，全站 POST/PUT/DELETE 接入自研 token 校验（form/header/JSON 三通道 + 登录/初始化等豁免路由），测试 161/161 通过。
+  - ✅ DEF-002 无 CSRF —— 已修复，全站 POST/PUT/DELETE 接入自研 token 校验（form/header/JSON 三通道 + 登录/初始化等豁免路由）。
+  - ✅ DEF-005 登录限流与弱口令 —— 已修复。
+- **全量测试 {TESTS} 项全部通过**（含 V4 邮件功能新增用例），测试报告由 `generate_test_report.py` 真实运行生成，非手工填写。
 
 整理日期：{DATE}
 """
@@ -434,8 +471,11 @@ def main():
 
     # 2) 文档与离线程序：从基线只读复制
     print('[1/4] 复制文档与离线程序（基线 ' + base_name + '）...')
-    for seg in ('01_需求文档', '02_设计文档', '04_测试'):
+    for seg in ('01_需求文档', '02_设计文档'):
         copy_tree(os.path.join(base, seg), os.path.join(dst, seg), seg)
+    # 04_测试：跳过基线里的过期带日期报告，只保留当日的
+    copy_tree(os.path.join(base, '04_测试'), os.path.join(dst, '04_测试'),
+              '04_测试', skip_stale_reports=True)
     # 离线程序需保留内置的演示数据库
     copy_tree(os.path.join(base, '05_离线程序'),
               os.path.join(dst, '05_离线程序'), '05_离线程序', keep_demo_db=True)
@@ -458,6 +498,7 @@ def main():
     print('[3/4] 同步最新测试报告与报告生成器...')
     rpt_src = os.path.join(PROJECT_DIR, 'docs', '测试报告')
     rpt_dst = os.path.join(dst, '04_测试')
+
     if os.path.isdir(rpt_src):
         cnt = 0
         for fn in os.listdir(rpt_src):
@@ -479,8 +520,39 @@ def main():
         if copy_file(os.path.join(docs_src, fn), os.path.join(rpt_dst, fn)):
             print(f'  [OK]   已同步 {fn}  <- docs/')
 
+    # 面向使用者（而非开发/评审）的操作文档，放在交付包根目录。
+    # 01/02 是给评审看的、03/04 是给开发看的，运维与管理员手册两类都不属于，
+    # 塞进任何一段都会让拿到包的人找不到。根目录与 演示指引.md 平级最好找。
+    print('[3.5/4] 同步使用者文档到根目录...')
+    # (源文件, 包内文件名)。包内统一加「督办系统-」前缀，与 01/02 的正式命名一致；
+    # 演示指引.md 只在基线包里有，docs/ 中没有，故从 base 取。
+    USER_DOCS = (
+        (os.path.join(docs_src, '督办系统-邮件功能配置指南.md'),
+         '督办系统-邮件功能配置指南.md'),
+        (os.path.join(docs_src, '生产部署指南.md'),
+         '督办系统-生产部署指南.md'),
+        (os.path.join(base, '演示指引.md'),
+         '演示指引.md'),
+    )
+    for src, out_name in USER_DOCS:
+        if copy_file(src, os.path.join(dst, out_name)):
+            print(f'  [OK]   已同步 {out_name}')
+
     # 5) 根 README
+    # {TESTS} 从测试报告的机器可读摘要里真读，不写死——
+    # 写死的数字每次加用例就腐一次，而交付包 README 是最容易忘了同步的地方。
+    tests_total = 0
+    summary_path = os.path.join(PROJECT_DIR, 'docs', '测试报告', 'test_summary.json')
+    try:
+        with open(summary_path, encoding='utf-8') as f:
+            tests_total = int(json.load(f).get('total', 0))
+    except (OSError, ValueError, TypeError):
+        pass
+    if not tests_total:
+        print('  [警告] 未能从 docs/测试报告/test_summary.json 读到用例数，'
+              'README 中的测试数将留空')
     readme = (README.replace('{VER}', ver).replace('{BASE}', BASE_VERSION)
+                    .replace('{TESTS}', str(tests_total) if tests_total else '—')
                     .replace('{DATE}', DATE).replace('{日期}', DATE))
     with open(os.path.join(dst, 'README.md'), 'w', encoding='utf-8') as f:
         f.write(readme)

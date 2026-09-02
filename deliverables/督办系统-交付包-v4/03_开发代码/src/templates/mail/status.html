@@ -1,0 +1,409 @@
+{% extends "base.html" %}
+{% block title %}邮件通知 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div class="page-header-left">
+        <h1 class="page-title">邮件通知</h1>
+        <span class="page-hint">
+            站内信之外的第二触达通道。未启用或配置不全时，系统仅发站内信，不影响任何业务功能。
+        </span>
+    </div>
+    <div class="page-header-actions">
+        <span class="status-badge {{ 'green' if overview.configured else 'gray' }}">
+            {{ '已启用' if overview.configured else '未启用' }}
+        </span>
+    </div>
+</div>
+
+{# ============================================================ #}
+{# 常驻横幅（B5-②）：未配置 / 已熔断必须一眼看见 #}
+{# ============================================================ #}
+{% if not overview.configured %}
+<div class="mail-banner danger">
+    <strong>邮件功能当前不可用</strong>
+    <span>{{ overview.reason or '请先完成 SMTP 配置' }}。此期间系统只会发送站内信。</span>
+</div>
+{% elif overview.circuit.state == 'open' %}
+<div class="mail-banner danger">
+    <strong>邮件发送已熔断</strong>
+    <span>{{ overview.circuit.reason or '连续发送失败，已自动暂停' }}
+        （熔断于 {{ overview.circuit.opened_at or '—' }}）</span>
+</div>
+{% endif %}
+
+{# ============================================================ #}
+{# 状态概览（I1-①） #}
+{# ============================================================ #}
+<div class="stats-grid">
+    <div class="stat-card success">
+        <span class="stat-label">今日发送成功</span>
+        <span class="stat-value">{{ overview.today_success }}</span>
+    </div>
+    <div class="stat-card {{ 'danger' if overview.today_failed else '' }}">
+        <span class="stat-label">今日发送失败</span>
+        <span class="stat-value">{{ overview.today_failed }}</span>
+    </div>
+    <div class="stat-card {{ 'warn' if overview.pending else '' }}">
+        <span class="stat-label">队列中待发</span>
+        <span class="stat-value">{{ overview.pending }}</span>
+        <span class="stat-extra">每 5 分钟扫描一轮</span>
+    </div>
+    <div class="stat-card brand">
+        <span class="stat-label">最近成功发送</span>
+        <span class="stat-value" style="font-size:15px;">{{ overview.last_sent_at or '暂无记录' }}</span>
+    </div>
+</div>
+
+{# ============================================================ #}
+{# 熔断详情与恢复（G3-③） #}
+{# ============================================================ #}
+{% if overview.circuit.state == 'open' %}
+<div class="card mail-card-alert">
+    <div class="card-title">发送已暂停</div>
+    <div class="detail-grid">
+        <div class="detail-field">
+            <span class="field-label">熔断原因</span>
+            <span class="field-value">{{ overview.circuit.reason or '—' }}</span>
+        </div>
+        <div class="detail-field">
+            <span class="field-label">发生时间</span>
+            <span class="field-value">{{ overview.circuit.opened_at or '—' }}</span>
+        </div>
+        <div class="detail-field">
+            <span class="field-label">自动恢复时间</span>
+            <span class="field-value">{{ overview.circuit.resume_at or '需人工恢复' }}</span>
+        </div>
+        <div class="detail-field">
+            <span class="field-label">连续失败次数</span>
+            <span class="field-value">{{ overview.circuit.fail_streak or 0 }} / {{ overview.circuit_threshold }}</span>
+        </div>
+    </div>
+    <p class="text-muted" style="font-size:12px;margin:10px 0 12px;">
+        认证失败（如授权码错误）不会自动恢复，必须由人工修正配置后点此恢复；
+        其余故障会在暂停 {{ overview.circuit_pause_minutes }} 分钟后自动试探一次。
+    </p>
+    <form method="POST" action="{{ url_for('mail.circuit_resume') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-primary btn-sm">修正后恢复发送</button>
+    </form>
+</div>
+{% endif %}
+
+{# ============================================================ #}
+{# SMTP 配置表单 #}
+{# ============================================================ #}
+<div class="card" style="max-width:720px;">
+    <div class="card-title">SMTP 配置</div>
+
+    {% if 'smtp_password' in env_locked %}
+    <div class="mail-banner warn" style="margin-bottom:14px;">
+        <strong>SMTP 密码由 .env 提供</strong>
+        <span>页面填写的密码不会生效，如需修改请编辑安装目录下的 .env 文件。</span>
+    </div>
+    {% endif %}
+    {% if env_locked|length > 0 %}
+    <p class="text-muted" style="font-size:12px;margin-bottom:12px;">
+        以下 {{ env_locked|length }} 项已被 .env / 系统环境变量锁定，页面修改不生效：
+        <code>{{ env_locked|join('、') }}</code>
+    </p>
+    {% endif %}
+
+    <form method="POST" action="{{ url_for('mail.save_config') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div class="form-group">
+            <label class="mail-check">
+                <input type="checkbox" name="enabled" value="1"
+                       {{ 'checked' if cfg.enabled }} {{ 'disabled' if 'enabled' in env_locked }}>
+                <span>启用邮件通知</span>
+            </label>
+            <p class="text-muted" style="font-size:12px;margin-top:4px;">
+                关闭后所有邮件静默跳过，仅保留站内信（推荐先用测试邮件验证通过再开启）
+            </p>
+        </div>
+
+        <div class="mail-form-row">
+            <div class="form-group">
+                <label>SMTP 服务器</label>
+                <input type="text" name="smtp_host" class="form-control" value="{{ cfg.smtp_host }}"
+                       placeholder="smtp.qq.com" {{ 'disabled' if 'smtp_host' in env_locked }}>
+            </div>
+            <div class="form-group" style="max-width:140px;">
+                <label>端口</label>
+                <input type="number" name="smtp_port" class="form-control" value="{{ cfg.smtp_port }}"
+                       min="1" max="65535" required {{ 'disabled' if 'smtp_port' in env_locked }}>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>账号（发件邮箱）</label>
+            <input type="text" name="smtp_username" class="form-control" value="{{ cfg.smtp_username }}"
+                   placeholder="例：notice@example.com" {{ 'disabled' if 'smtp_username' in env_locked }}>
+        </div>
+
+        <div class="form-group">
+            <label>SMTP 密码 / 授权码</label>
+            <input type="password" name="smtp_password" class="form-control"
+                   placeholder="{{ pwd_masked or '留空表示不修改' }}"
+                   autocomplete="new-password"
+                   {{ 'disabled' if (not pwd_settable or 'smtp_password' in env_locked) }}>
+            <p class="text-muted" style="font-size:12px;margin-top:4px;">
+                {% if not pwd_settable %}
+                    加密不可用（data/secret.key 不可读），无法保存密码，请检查文件权限。
+                {% else %}
+                    {{ pwd_masked or '留空 = 保持原密码不变。多数邮箱需使用「授权码」而非登录密码。' }}
+                {% endif %}
+            </p>
+        </div>
+
+        <div class="form-group">
+            <label>加密方式</label>
+            <div class="mail-check-row">
+                <label class="mail-check">
+                    <input type="checkbox" name="use_ssl" value="1"
+                           {{ 'checked' if cfg.use_ssl }} {{ 'disabled' if 'use_ssl' in env_locked }}>
+                    <span>SSL（465 端口，推荐）</span>
+                </label>
+                <label class="mail-check">
+                    <input type="checkbox" name="use_tls" value="1"
+                           {{ 'checked' if cfg.use_tls }} {{ 'disabled' if 'use_tls' in env_locked }}>
+                    <span>STARTTLS（587 端口）</span>
+                </label>
+            </div>
+            <p class="text-muted" style="font-size:12px;margin-top:4px;">两者只能选其一，都不选则为明文连接</p>
+        </div>
+
+        <div class="mail-form-row">
+            <div class="form-group">
+                <label>发件箱地址</label>
+                <input type="text" name="from_addr" class="form-control" value="{{ cfg.from_addr }}"
+                       placeholder="通常与账号一致" {{ 'disabled' if 'from_addr' in env_locked }}>
+            </div>
+            <div class="form-group">
+                <label>发件人名称</label>
+                <input type="text" name="from_name" class="form-control" value="{{ cfg.from_name }}"
+                       {{ 'disabled' if 'from_name' in env_locked }}>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>邮件尾部说明</label>
+            <input type="text" name="footer" class="form-control" value="{{ cfg.footer }}"
+                   {{ 'disabled' if 'footer' in env_locked }}>
+        </div>
+
+        <div class="panel-section-title" style="margin-top:18px;">发送策略</div>
+
+        <div class="mail-form-row">
+            <div class="form-group">
+                <label>单轮发送上限（封）</label>
+                <input type="number" name="batch_limit" class="form-control" value="{{ cfg.batch_limit }}"
+                       min="1" max="200" required {{ 'disabled' if 'batch_limit' in env_locked }}>
+            </div>
+            <div class="form-group">
+                <label>失败重试次数</label>
+                <input type="number" name="retry_max" class="form-control" value="{{ cfg.retry_max }}"
+                       min="0" max="5" required {{ 'disabled' if 'retry_max' in env_locked }}>
+            </div>
+            <div class="form-group">
+                <label>手动发送冷却（秒）</label>
+                <input type="number" name="manual_cooldown" class="form-control" value="{{ cfg.manual_cooldown }}"
+                       min="0" max="3600" required {{ 'disabled' if 'manual_cooldown' in env_locked }}>
+            </div>
+        </div>
+        <p class="text-muted" style="font-size:12px;margin:-6px 0 12px;">
+            重试间隔按指数退避 {{ overview.retry_backoff }} 分钟递增；发送记录保留 {{ overview.retention_days }} 天。
+        </p>
+
+        <div class="form-group">
+            <label class="mail-check">
+                <input type="checkbox" name="mask_title" value="1"
+                       {{ 'checked' if cfg.mask_title }} {{ 'disabled' if 'mask_title' in env_locked }}>
+                <span>邮件标题中隐去任务标题（仅显示任务编号）</span>
+            </label>
+            <p class="text-muted" style="font-size:12px;margin-top:4px;">
+                开启后邮件标题只出现「任务 #12」这类编号，适合邮箱会被他人看到的场景
+            </p>
+        </div>
+
+        <button type="submit" class="btn btn-primary">保存配置</button>
+    </form>
+</div>
+
+{# ============================================================ #}
+{# 验证操作（I1-④ 测试邮件 + 立即扫描） #}
+{# ============================================================ #}
+<div class="card" style="max-width:720px;">
+    <div class="card-title">验证与运维</div>
+    <div class="mail-action-row">
+        <form method="POST" action="{{ url_for('mail.send_test') }}" class="mail-inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <select name="recipient_id" class="form-control" style="max-width:220px;">
+                {% for u in candidates %}
+                <option value="{{ u['user_id'] }}" {{ 'selected' if u['user_id'] == current_user['user_id'] }}>
+                    {{ u['display_name'] }}{% if u['email'] %}（{{ u['email'] }}）{% endif %}
+                </option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-secondary btn-sm">发送测试邮件</button>
+        </form>
+        <form method="POST" action="{{ url_for('mail.scan_now') }}" class="mail-inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-secondary btn-sm">立即发送队列（{{ overview.pending }}）</button>
+        </form>
+    </div>
+    <p class="text-muted" style="font-size:12px;margin-top:8px;">
+        测试邮件<b>不走队列</b>，点击后立即连接 SMTP，是最快的配置校验方式；
+        「立即发送队列」用于不想等下一个 5 分钟周期的场景。
+    </p>
+</div>
+
+{# ============================================================ #}
+{# 未填邮箱名单（D4-② / I1-③） #}
+{# ============================================================ #}
+{% if no_email_users %}
+<div class="card mail-card-warn" style="max-width:720px;">
+    <div class="card-title">{{ no_email_users|length }} 位用户未填写邮箱，收不到任何邮件</div>
+    <table class="user-table mail-table">
+        <thead>
+            <tr><th style="width:120px;">用户名</th><th style="width:120px;">姓名</th><th>补填邮箱</th></tr>
+        </thead>
+        <tbody>
+            {% for u in no_email_users %}
+            <tr>
+                <td>{{ u['username'] }}</td>
+                <td>{{ u['display_name'] }}</td>
+                <td>
+                    <form method="POST" action="{{ url_for('mail.set_user_email', user_id=u['user_id']) }}"
+                          class="mail-inline-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="text" name="email" class="form-control" placeholder="name@example.com">
+                        <button type="submit" class="btn btn-secondary btn-sm">保存</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="text-muted" style="font-size:12px;margin-top:8px;">
+        邮箱属于个人信息，此处仅管理员可见。也可以让用户自己在「个人设置」中填写。
+    </p>
+</div>
+{% endif %}
+
+{# ============================================================ #}
+{# 失败清单与一键重发（G7-① / I1-③） #}
+{# ============================================================ #}
+{% if failed_logs %}
+<div class="card mail-card-alert" style="max-width:900px;">
+    <div class="card-title">发送失败清单（最近 {{ failed_logs|length }} 条）</div>
+    <table class="user-table mail-table">
+        <thead>
+            <tr>
+                <th style="width:150px;">时间</th>
+                <th style="width:110px;">收件人</th>
+                <th>主题</th>
+                <th style="width:180px;">失败原因</th>
+                <th style="width:80px;">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in failed_logs %}
+            <tr>
+                <td>{{ log['finished_at'] or log['created_at'] }}</td>
+                <td>{{ log['recipient_name'] or '—' }}</td>
+                <td title="{{ log['subject'] }}">{{ log['subject'] }}</td>
+                <td title="{{ log['error_message'] or '' }}">{{ log['error_message'] or '—' }}</td>
+                <td>
+                    <form method="POST" action="{{ url_for('mail.requeue', log_id=log['log_id']) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn btn-secondary btn-sm">重发</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="text-muted" style="font-size:12px;margin-top:8px;">
+        「重发」会把该邮件重新放回队列，按当前配置再发一次；正文将按模板重新生成（历史只存主题以节省空间）。
+    </p>
+</div>
+{% endif %}
+
+{# ============================================================ #}
+{# 发送记录（I1-②） #}
+{# ============================================================ #}
+<div class="card" style="max-width:900px;">
+    <div class="card-title">发送记录（共 {{ total }} 条）</div>
+
+    <form method="GET" action="{{ url_for('mail.status') }}" class="mail-filter">
+        <select name="status" class="form-control" style="max-width:120px;">
+            <option value="">全部结果</option>
+            <option value="success" {{ 'selected' if filters.status == 'success' }}>成功</option>
+            <option value="failed" {{ 'selected' if filters.status == 'failed' }}>失败</option>
+        </select>
+        <select name="mail_type" class="form-control" style="max-width:150px;">
+            <option value="">全部类型</option>
+            {% for t in mail_types %}
+            <option value="{{ t }}" {{ 'selected' if filters.mail_type == t }}>{{ mail_type_labels[t] }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="keyword" class="form-control" style="max-width:220px;"
+               placeholder="主题或收件邮箱" value="{{ filters.keyword }}">
+        <button type="submit" class="btn btn-secondary btn-sm">筛选</button>
+        {% if filters.status or filters.mail_type or filters.keyword %}
+        <a href="{{ url_for('mail.status') }}" class="btn btn-secondary btn-sm">清除</a>
+        {% endif %}
+    </form>
+
+    {% if logs %}
+    <table class="user-table mail-table">
+        <thead>
+            <tr>
+                <th style="width:150px;">时间</th>
+                <th style="width:110px;">收件人</th>
+                <th style="width:110px;">类型</th>
+                <th>主题</th>
+                <th style="width:80px;">结果</th>
+                <th style="width:60px;">次数</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+            <tr>
+                <td>{{ log['finished_at'] or log['created_at'] }}</td>
+                <td>{{ log['recipient_name'] or '—' }}</td>
+                <td>{{ mail_type_labels.get(log['mail_type'], log['mail_type']) }}</td>
+                <td title="{{ log['subject'] }}">{{ log['subject'] }}</td>
+                <td>
+                    <span class="status-badge {{ 'green' if log['success'] else 'red' }}">
+                        {{ '成功' if log['success'] else '失败' }}
+                    </span>
+                </td>
+                <td>{{ log['attempts'] or 1 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if total_pages > 1 %}
+    <div class="mail-pager">
+        {% if page > 1 %}
+        <a href="{{ url_for('mail.status', status=filters.status, mail_type=filters.mail_type, keyword=filters.keyword, page=page-1) }}"
+           class="btn btn-secondary btn-sm">上一页</a>
+        {% endif %}
+        <span class="text-muted" style="font-size:12px;">第 {{ page }} / {{ total_pages }} 页</span>
+        {% if page < total_pages %}
+        <a href="{{ url_for('mail.status', status=filters.status, mail_type=filters.mail_type, keyword=filters.keyword, page=page+1) }}"
+           class="btn btn-secondary btn-sm">下一页</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <p class="text-muted">暂无符合条件的发送记录。</p>
+    {% endif %}
+</div>
+
+{% endblock %}

@@ -6,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
     <title>系统初始化 - 督办系统</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css', v='20260830af') }}">
-    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg', v='20260830af') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css', v=static_version) }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg', v=static_version) }}">
 </head>
 <body>
 <div class="auth-page">

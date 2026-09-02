@@ -15,8 +15,8 @@
             } catch (e) { }
         })();
     </script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css', v='20260830af') }}">
-    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg', v='20260830af') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css', v=static_version) }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg', v=static_version) }}">
 </head>
 <body>
 <div class="auth-page">
@@ -145,6 +145,6 @@
     }
 })();
 </script>
-<script src="{{ url_for('static', filename='js/main.js', v='20260830af') }}"></script>
+<script src="{{ url_for('static', filename='js/main.js', v=static_version) }}"></script>
 </body>
 </html>

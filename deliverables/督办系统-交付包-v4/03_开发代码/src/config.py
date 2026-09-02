@@ -44,6 +44,16 @@ else:
 TEMPLATE_DIR = os.path.join(BUNDLE_DIR, 'templates')
 STATIC_DIR = os.path.join(BUNDLE_DIR, 'static')
 
+# 静态资源缓存串（cache-busting）：改了 CSS/JS 之后改这里即可全局生效。
+#
+# 背景：模板里 url_for('static', ..., v='YYYYMMDDx') 靠这个版本号让浏览器
+# 丢弃旧缓存。以前版本号写死在每个模板里，而 login.html / setup.html 是
+# 独立页面（不继承 base.html），改样式时只 bump 了 base.html，导致登录页
+# 和初始化向导页仍请求旧版本 → 拿到旧 CSS。
+# 现在统一由 app.py 的 inject_globals() 注入 static_version，模板里一律
+# 写 v=static_version，杜绝「改了样式忘了升某个页面」。
+STATIC_VERSION = '20260903a'
+
 # 数据库文件路径（运行时自动创建 data/ 目录）
 # 数据库始终放在 BASE_DIR 下（exe 同级目录），不在临时解压目录
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -309,3 +319,70 @@ LOG_BACKUP_COUNT = _env_int('LOG_BACKUP_COUNT', 5)
 # ============================================================
 # 前端消息红点轮询间隔（毫秒）
 UNREAD_POLL_INTERVAL_MS = 30000
+
+# ============================================================
+# 邮件通知配置（V4 迭代：发送邮件功能）
+# ============================================================
+# 取值优先级：系统环境变量 / .env  >  数据库（设置页填写，密码加密存储）  >  此处默认值。
+# 数据库这一层由 models.get_mail_config() 合并，不在此处读取。
+#
+# ⚠️ 铁律复核：所有默认值必须让「不配置 = 行为不变」成立。
+#    MAIL_ENABLED 默认 False 且 host 默认为空，因此 exe 分发到目标机器时，
+#    即使没有 .env、设置页也没填过，邮件功能完全不激活，行为与 V3 一致。
+# ------------------------------------------------------------
+
+# 邮件功能总开关。False 时队列不再扫描发送，页面也不显示邮件入口。
+MAIL_ENABLED = _env_bool('MAIL_ENABLED', False)
+
+# SMTP 服务器地址（如 smtp.qq.com）。为空即视为未配置。
+MAIL_SMTP_HOST = _env_str('MAIL_SMTP_HOST', '')
+
+# SMTP 端口：465 走 SSL 直连，587 走 STARTTLS
+MAIL_SMTP_PORT = _env_int('MAIL_SMTP_PORT', 465)
+
+# SMTP 账号（通常是完整邮箱地址）
+MAIL_SMTP_USERNAME = _env_str('MAIL_SMTP_USERNAME', '')
+
+# SSL 直连（465 端口用）。与 MAIL_USE_TLS 二选一，都填 True 时以 SSL 优先。
+MAIL_USE_SSL = _env_bool('MAIL_USE_SSL', True)
+
+# STARTTLS（587 端口用）
+MAIL_USE_TLS = _env_bool('MAIL_USE_TLS', False)
+
+# 发件箱地址（B2-③：全员共用同一个发件箱，Reply-To 才指向具体操作人）
+MAIL_FROM_ADDR = _env_str('MAIL_FROM_ADDR', '')
+
+# 发件人显示名
+MAIL_FROM_NAME = _env_str('MAIL_FROM_NAME', '督办系统')
+
+# 邮件落款（E5-①：做成可配项，不同单位可改成自己的署名）
+MAIL_FOOTER = _env_str('MAIL_FOOTER', '本邮件由督办系统自动发送，请勿直接回复。')
+
+# 每轮扫描最多发送几封物理邮件（F3-②：防止瞬间批量外发触发服务商风控）
+MAIL_BATCH_LIMIT = _env_int('MAIL_BATCH_LIMIT', 20)
+
+# 单封邮件最多重试几次（G1-①：超过后标记永久失败）
+MAIL_RETRY_MAX = _env_int('MAIL_RETRY_MAX', 3)
+
+# 重试间隔（分钟），长度应等于 MAIL_RETRY_MAX；不够时用最后一项兜底
+# 默认 5 / 15 / 30 分钟递增
+MAIL_RETRY_BACKOFF = _env_str('MAIL_RETRY_BACKOFF', '5,15,30')
+
+# 手动发送冷却秒数（F4-②：同一任务 + 同一操作人 5 分钟内只能发一次）
+MAIL_MANUAL_COOLDOWN = _env_int('MAIL_MANUAL_COOLDOWN', 300)
+
+# 标题脱敏开关（H5-②：开启后邮件正文不显示完整任务标题，只显示「任务 #123」）
+MAIL_MASK_TITLE = _env_bool('MAIL_MASK_TITLE', False)
+
+# 发送记录保留天数（I2-②：超期自动清理，避免库文件无限膨胀）
+MAIL_LOG_RETENTION_DAYS = _env_int('MAIL_LOG_RETENTION_DAYS', 90)
+
+# 连续失败多少次触发通用熔断（G4-②），熔断后暂停 60 分钟再自动试探
+MAIL_CIRCUIT_FAIL_THRESHOLD = _env_int('MAIL_CIRCUIT_FAIL_THRESHOLD', 10)
+
+# 通用熔断的暂停时长（分钟）
+MAIL_CIRCUIT_PAUSE_MINUTES = _env_int('MAIL_CIRCUIT_PAUSE_MINUTES', 60)
+
+# 注：MAIL_SMTP_PASSWORD 不在此处读取。
+#     它只有两处来源：环境变量 / .env（明文）、数据库（加密，见 crypto_util.py）。
+#     放在 config 里会被模块级常量固化，既不利于设置页覆盖，也增加泄露面。

@@ -1584,6 +1584,79 @@ body.page-task-task_list .task-table td:nth-child(4) .mini-progress {
 }
 
 /* ============================================================
+   邮件通知（V4 迭代）
+   ============================================================ */
+/* 常驻横幅：未配置 / 已熔断时必须一眼看见，不使用可关闭的 alert，
+   因为「邮件悄悄不发了」是最难被发现的故障。 */
+.mail-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    border-radius: var(--radius-md, 8px);
+    font-size: 13px;
+    line-height: 1.6;
+}
+.mail-banner strong { font-weight: 600; }
+.mail-banner.danger {
+    background: var(--color-red-bg);
+    color: var(--color-red);
+    border: 1px solid var(--color-red);
+}
+.mail-banner.warn {
+    background: var(--color-amber-bg);
+    color: var(--color-amber);
+    border: 1px solid var(--color-amber);
+}
+
+/* 卡片强调色：失败清单与熔断卡用红色左边框区分于普通配置卡 */
+.mail-card-alert { border-left: 3px solid var(--color-red); }
+.mail-card-warn  { border-left: 3px solid var(--color-amber); }
+
+/* 复选框行：原生 checkbox 与文字基线对不齐，用 flex 居中 */
+.mail-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+}
+.mail-check input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; }
+.mail-check-row { display: flex; flex-wrap: wrap; gap: 18px; }
+
+/* 两/三列并排表单：SMTP 场景下「服务器+端口」这类字段放一行更紧凑 */
+.mail-form-row { display: flex; flex-wrap: wrap; gap: 14px; }
+.mail-form-row .form-group { flex: 1; min-width: 140px; }
+
+/* 行内表单（补邮箱 / 测试邮件 / 立即扫描）：按钮与输入框同一行 */
+.mail-inline-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mail-inline-form .form-control { flex: 1; min-width: 160px; }
+
+.mail-action-row { display: flex; flex-wrap: wrap; gap: 12px 20px; }
+
+/* 邮件页表格：内容长度差异大，允许长文本换行以免撑破卡片 */
+.mail-table { table-layout: auto; }
+.mail-table td { white-space: normal; word-break: break-all; }
+
+.mail-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.mail-pager {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--color-border-light);
+}
+
+@media (max-width: 768px) {
+    .mail-form-row { flex-direction: column; }
+    .mail-form-row .form-group { max-width: none; }
+}
+
+/* ============================================================
    响应式
    ============================================================ */
 /* 中等宽度：闭环矩阵 8 列在半栏里放不开（半栏约 520px < 表格最小 540px），
