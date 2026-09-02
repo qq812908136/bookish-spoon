@@ -288,6 +288,37 @@
 </div>
 
 {# ============================================================ #}
+{# 邮件提醒（V4，C3-① + H1-②：管理员与创建人可发） #}
+{# ============================================================ #}
+{% if can_send_mail %}
+<div class="card" style="margin-bottom:16px;">
+    <div class="panel-section-title">{{ icon('mail', 14) }} 邮件提醒</div>
+    {% if not mail_ready %}
+    <p class="text-muted" style="font-size:12px;">
+        邮件功能未启用或未完成配置，当前仅可发送站内信（管理员请在「邮件」页配置）。
+    </p>
+    {% else %}
+    <form action="{{ url_for('task.task_send_mail', task_id=task['task_id']) }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label>补充说明（可选，≤200 字）</label>
+            <textarea name="note" class="form-control" rows="2" maxlength="200"
+                      placeholder="会附在邮件正文末尾，例如：请于本周五前反馈进展"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm" {{ 'disabled' if mail_cooling }}>
+            {{ icon('mail', 14) }} 发送提醒邮件给负责人
+        </button>
+        {% if mail_cooling %}
+        <span class="text-muted" style="margin-left:8px;font-size:12px;">
+            冷却中，{{ mail_cooldown_min }} 分钟内不可重复发送
+        </span>
+        {% endif %}
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+
+{# ============================================================ #}
 {# 危险操作（仅管理员，仅已撤销任务） #}
 {# ============================================================ #}
 {% if can_delete %}

@@ -13,6 +13,7 @@
 
 from datetime import datetime
 
+import mail_dispatcher
 import models
 from state_machine import TaskStatus
 
@@ -75,6 +76,34 @@ def run_warning_scan():
         # ── 合并去重发送 ──
         if warnings:
             _send_merged_warnings(task, warnings, today)
+
+    # ── 邮件通道（V4）──
+    # 位置刻意在循环**之后**：邮件是按「人」合并的（F2-②），
+    # 必须等全部任务扫描完、拿到每人完整的逾期清单，才能生成合并邮件。
+    # 若在循环内逐任务入队，同一负责人会被去重键挡住，导致清单不完整。
+    _enqueue_warning_mails()
+
+
+def _enqueue_warning_mails():
+    """把本次预警扫描的结果投递到邮件队列。
+
+    三层预警各自的入队函数内部都会检查用户的订阅等级（C1-③④），
+    未配置邮件时则直接返回（B5-① 静默降级）。
+
+    任何异常都不能影响站内信流程——邮件只是附加通道，
+    它挂了不该让预警本身消失，所以这里吞掉所有异常并记日志。
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        mail_dispatcher.enqueue_overdue_warnings()
+        mail_dispatcher.enqueue_due_soon_warnings()
+        mail_dispatcher.enqueue_inactive_warnings()
+        # 管理员日报放在最后：此时当天的逾期邮件已入队，
+        # 日报统计到的是最完整的数据（D2-②）
+        mail_dispatcher.enqueue_daily_reports()
+    except Exception as e:
+        logger.error(f'预警邮件入队异常（不影响站内信）：{e}', exc_info=True)
 
 
 def _send_merged_warnings(task, warnings, today):
@@ -143,3 +172,14 @@ def trigger_overdue_warning(task):
                 content=content,
                 task_id=task['task_id'],
             )
+
+    # ── 邮件通道（V4）：任务刚被标记为逾期时立刻通知 ──
+    # 传 task 参数 → 只处理这位负责人，避免每 5 分钟全表扫描。
+    # 与每日扫描共用同一个去重键（overdue:{人}:{日期}），
+    # 因此同一天无论触发多少次都只会发一封。
+    import logging
+    try:
+        mail_dispatcher.enqueue_overdue_warnings(task=task)
+    except Exception as e:
+        logging.getLogger(__name__).error(
+            f'逾期邮件入队异常（不影响站内信）：{e}', exc_info=True)

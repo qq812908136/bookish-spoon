@@ -13,11 +13,14 @@
 所有函数返回 sqlite3.Row 对象（字典式访问）或普通 Python 类型。
 """
 
+import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
+import crypto_util
 import db
+import mail_constants
 
 # ============================================================
 # 一、数据库初始化
@@ -132,6 +135,9 @@ def init_db():
     # V2 迁移：tasks 加 3 列 + evidence/blockers 两张新表（幂等，老库自动升级）
     _migrate_v2()
 
+    # V3 迁移：邮件功能——users 加 2 列 + email_queue/email_log 两张新表
+    _migrate_v3()
+
 
 def _migrate_v2():
     """V2 数据库迁移（幂等，可重复调用）。
@@ -193,6 +199,95 @@ def _migrate_v2():
             print(f"[migrate_v2] tasks 表已新增列: {', '.join(migrated)}")
     except Exception as e:  # pragma: no cover - 迁移失败不阻断启动
         print(f"[migrate_v2] 迁移异常（不影响启动）: {e}")
+
+
+def _migrate_v3():
+    """V3 数据库迁移：邮件通知功能（幂等，可重复调用）。
+
+    内容：
+    1. 新建 email_queue（待发队列）/ email_log（发送历史）两张表 + 索引
+    2. users 表补 2 列：
+       - email             TEXT  选填；未填则降级为只走站内信（A5-②/D4）
+       - mail_notify_level TEXT  订阅等级，默认 'overdue'（D6-②）
+
+    与 _migrate_v2 同一套路子：PRAGMA table_info 检查列存在性，
+    老库升级数据不丢，异常只打印不阻断启动。
+    """
+    conn = db.get_db()
+    try:
+        # --- 1. 新表（CREATE IF NOT EXISTS 天然幂等） ---
+        conn.executescript("""
+        -- 邮件发送队列：所有待发邮件先落这里，由调度器每 5 分钟扫描发送（B6-③）
+        CREATE TABLE IF NOT EXISTS email_queue (
+            queue_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipient_id     INTEGER NOT NULL,
+            recipient_email  TEXT    NOT NULL,
+            task_id          INTEGER,
+            mail_type        TEXT    NOT NULL,
+            subject          TEXT    NOT NULL,
+            body             TEXT    NOT NULL,
+            reply_to         TEXT,
+            operator_id      INTEGER,
+            dedup_key        TEXT    NOT NULL,
+            status           TEXT    NOT NULL DEFAULT 'pending',
+            retry_count      INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at  TEXT    NOT NULL,
+            last_error       TEXT,
+            created_at       TEXT    NOT NULL,
+            sent_at          TEXT,
+            FOREIGN KEY (recipient_id) REFERENCES users(user_id),
+            FOREIGN KEY (task_id)      REFERENCES tasks(task_id) ON DELETE CASCADE,
+            FOREIGN KEY (operator_id)  REFERENCES users(user_id)
+        );
+
+        -- 邮件发送历史：发送成功/永久失败后从队列转入此表，保留 90 天（I2-②）
+        CREATE TABLE IF NOT EXISTS email_log (
+            log_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipient_id     INTEGER,
+            recipient_email  TEXT    NOT NULL,
+            task_id          INTEGER,
+            mail_type        TEXT    NOT NULL,
+            subject          TEXT    NOT NULL,
+            operator_id      INTEGER,
+            success          INTEGER NOT NULL,
+            error_message    TEXT,
+            attempts         INTEGER NOT NULL DEFAULT 1,
+            created_at       TEXT    NOT NULL,
+            finished_at      TEXT    NOT NULL,
+            FOREIGN KEY (recipient_id) REFERENCES users(user_id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_email_queue_dedup
+            ON email_queue(dedup_key);
+        CREATE INDEX IF NOT EXISTS idx_email_queue_status
+            ON email_queue(status, next_attempt_at);
+        CREATE INDEX IF NOT EXISTS idx_email_queue_recipient
+            ON email_queue(recipient_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_email_log_created
+            ON email_log(created_at);
+        CREATE INDEX IF NOT EXISTS idx_email_log_recipient
+            ON email_log(recipient_id, created_at);
+        """)
+        conn.commit()
+
+        # --- 2. users 补列（逐列检查，存在则跳过） ---
+        existing_cols = {
+            row['name'] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        new_cols = [
+            ("email",             "TEXT"),
+            ("mail_notify_level", "TEXT NOT NULL DEFAULT 'overdue'"),
+        ]
+        migrated = []
+        for col_name, col_def in new_cols:
+            if col_name not in existing_cols:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}")
+                migrated.append(col_name)
+        if migrated:
+            conn.commit()
+            print(f"[migrate_v3] users 表已新增列: {', '.join(migrated)}")
+    except Exception as e:  # pragma: no cover - 迁移失败不阻断启动
+        print(f"[migrate_v3] 迁移异常（不影响启动）: {e}")
 
 
 # ============================================================
@@ -1001,3 +1096,762 @@ def get_closure_matrix(range_key='all', page=1, per_page=6):
         item['closure_rate'] = round(closure / item['total'], 4) if item['total'] > 0 else None
         matrix.append(item)
     return matrix, total, total_pages, page
+
+
+# ============================================================
+# 十一、邮件通知（V4 迭代）
+# ============================================================
+# 分四块：
+#   A. 邮件配置读写（三级优先级 + 密码加密）
+#   B. 用户邮箱与订阅等级
+#   C. 发送队列 CRUD
+#   D. 发送历史（email_log）与统计
+#
+# 设计要点见 docs/督办系统-V4邮件功能需求清单.md。
+
+
+# --- A. 邮件配置读写 -------------------------------------------------------
+
+# 配置项的「键名 → 环境变量名 → config 属性 → 类型」映射表。
+# 读取优先级：系统环境变量/.env  >  数据库（设置页填写）  >  config.py 默认值。
+#
+# 注意：这里必须直接读 os.environ，不能用 config.MAIL_* 判断「环境变量有没有配」——
+# config 里的值已是「env 或默认值」的合并结果，无法反推来源。
+MAIL_SETTING_SCHEMA = [
+    ('enabled',         'MAIL_ENABLED',         'MAIL_ENABLED',         'bool'),
+    ('smtp_host',       'MAIL_SMTP_HOST',       'MAIL_SMTP_HOST',       'str'),
+    ('smtp_port',       'MAIL_SMTP_PORT',       'MAIL_SMTP_PORT',       'int'),
+    ('smtp_username',   'MAIL_SMTP_USERNAME',   'MAIL_SMTP_USERNAME',   'str'),
+    ('use_ssl',         'MAIL_USE_SSL',         'MAIL_USE_SSL',         'bool'),
+    ('use_tls',         'MAIL_USE_TLS',         'MAIL_USE_TLS',         'bool'),
+    ('from_addr',       'MAIL_FROM_ADDR',       'MAIL_FROM_ADDR',       'str'),
+    ('from_name',       'MAIL_FROM_NAME',       'MAIL_FROM_NAME',       'str'),
+    ('footer',          'MAIL_FOOTER',          'MAIL_FOOTER',          'str'),
+    ('batch_limit',     'MAIL_BATCH_LIMIT',     'MAIL_BATCH_LIMIT',     'int'),
+    ('retry_max',       'MAIL_RETRY_MAX',       'MAIL_RETRY_MAX',       'int'),
+    ('manual_cooldown', 'MAIL_MANUAL_COOLDOWN', 'MAIL_MANUAL_COOLDOWN', 'int'),
+    ('mask_title',      'MAIL_MASK_TITLE',      'MAIL_MASK_TITLE',      'bool'),
+]
+
+
+def _cast_setting(raw, typ):
+    """把配置字符串转成目标类型，转换失败时回退到 config 默认值。"""
+    try:
+        if typ == 'bool':
+            return str(raw).strip().lower() in ('1', 'true', 'yes', 'on')
+        if typ == 'int':
+            return int(str(raw).strip())
+        return str(raw)
+    except (ValueError, AttributeError):
+        return None
+
+
+def get_mail_config():
+    """取得完整邮件配置（已合并三级优先级）。
+
+    Returns:
+        dict: 含 schema 中全部键，外加：
+            - smtp_password  str/None  已解密的密码（无配置时为 None）
+            - password_source str      'env' / 'db' / 'none'，页面展示用
+            - 若干只读运维参数（retry_backoff / retention_days 等）
+    """
+    # 一次性读出全部配置再在内存里比对：get_config 每次一条 SQL，
+    # 而这里要查 14 个键，抽屉每打开一次就要付 14 次查询的代价。
+    all_cfg = get_all_config()
+
+    cfg = {}
+    for key, env_key, cfg_attr, typ in MAIL_SETTING_SCHEMA:
+        # 1) 环境变量 / .env 优先
+        env_raw = os.environ.get(env_key)
+        if env_raw is not None and str(env_raw).strip() != '':
+            val = _cast_setting(env_raw, typ)
+            if val is not None:
+                cfg[key] = val
+                continue
+        # 2) 数据库（设置页填写）
+        db_raw = all_cfg.get('mail_' + key)
+        if db_raw is not None and str(db_raw).strip() != '':
+            val = _cast_setting(db_raw, typ)
+            if val is not None:
+                cfg[key] = val
+                continue
+        # 3) config.py 默认值
+        cfg[key] = getattr(config, cfg_attr)
+
+    # --- 密码单独处理：环境变量明文 / 数据库密文 ---
+    env_pwd = os.environ.get('MAIL_SMTP_PASSWORD')
+    if env_pwd is not None and env_pwd.strip() != '':
+        cfg['smtp_password'] = env_pwd.strip()
+        cfg['password_source'] = 'env'
+    else:
+        stored = all_cfg.get('mail_smtp_password')
+        decrypted = crypto_util.decrypt(stored) if stored else None
+        cfg['smtp_password'] = decrypted
+        cfg['password_source'] = 'db' if decrypted else 'none'
+
+    # --- 只读运维参数：不入库，只从 env / config 读 ---
+    cfg['retry_backoff'] = _parse_backoff(
+        os.environ.get('MAIL_RETRY_BACKOFF') or config.MAIL_RETRY_BACKOFF)
+    cfg['retention_days'] = _env_int_or('MAIL_LOG_RETENTION_DAYS', config.MAIL_LOG_RETENTION_DAYS)
+    cfg['circuit_threshold'] = _env_int_or(
+        'MAIL_CIRCUIT_FAIL_THRESHOLD', config.MAIL_CIRCUIT_FAIL_THRESHOLD)
+    cfg['circuit_pause_minutes'] = _env_int_or(
+        'MAIL_CIRCUIT_PAUSE_MINUTES', config.MAIL_CIRCUIT_PAUSE_MINUTES)
+
+    return cfg
+
+
+def _parse_backoff(raw):
+    """解析重试间隔串（如 '5,15,30'）为整数分钟列表。"""
+    parts = []
+    for chunk in str(raw).split(','):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            val = int(chunk)
+        except ValueError:
+            continue
+        if val > 0:
+            parts.append(val)
+    return parts or [5, 15, 30]
+
+
+def _env_int_or(env_key, default):
+    """读环境变量整数，缺失或非法时返回默认值。"""
+    raw = os.environ.get(env_key)
+    if raw is None or str(raw).strip() == '':
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return default
+
+
+def is_mail_configured(cfg=None):
+    """邮件功能是否「可用」：开关打开且关键字段齐全。
+
+    注意与 get_mail_config()['enabled'] 的区别——开关开了但没填服务器，
+    仍然发不出去。函数用于决定要不要真的去连 SMTP。
+    """
+    if cfg is None:
+        cfg = get_mail_config()
+    return bool(
+        cfg.get('enabled')
+        and (cfg.get('smtp_host') or '').strip()
+        and (cfg.get('from_addr') or '').strip()
+    )
+
+
+def mail_unconfigured_reason(cfg=None):
+    """返回邮件不可用的原因文案（用于设置页红条），可用时返回 None。"""
+    if cfg is None:
+        cfg = get_mail_config()
+    if not cfg.get('enabled'):
+        return '邮件功能未启用（MAIL_ENABLED 为关闭状态）'
+    if not (cfg.get('smtp_host') or '').strip():
+        return '未配置 SMTP 服务器地址'
+    if not (cfg.get('from_addr') or '').strip():
+        return '未配置发件箱地址'
+    return None
+
+
+def set_mail_config(form_data, save_password=True):
+    """保存设置页提交的邮件配置。
+
+    Args:
+        form_data: dict，键名与 MAIL_SETTING_SCHEMA 的第一列一致
+                   （另可含 smtp_password）
+        save_password: 是否保存密码。置 False 时保留库中原有密码，
+                       用于「密码框留空 = 不修改」的场景。
+
+    Returns:
+        tuple: (错误列表 list[str], 已保存键数 int)
+    """
+    errors = []
+    saved = 0
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    for key, _env_key, _cfg_attr, typ in MAIL_SETTING_SCHEMA:
+        if key not in form_data:
+            continue
+        raw = form_data[key]
+
+        # 布尔型来自复选框：有值即为真
+        if typ == 'bool':
+            value = '1' if raw in (True, '1', 'true', 'on', 1) else '0'
+        elif typ == 'int':
+            try:
+                value = str(int(str(raw).strip()))
+            except (ValueError, AttributeError):
+                errors.append(f'配置项 {key} 必须是整数')
+                continue
+        else:
+            value = str(raw).strip()
+
+        set_config('mail_' + key, value)
+        saved += 1
+
+    # --- 密码：加密后入库 ---
+    if save_password:
+        pwd = (form_data.get('smtp_password') or '').strip()
+        if pwd:
+            encrypted = crypto_util.encrypt(pwd)
+            if encrypted is None:
+                errors.append('SMTP 密码保存失败：加密不可用（data/secret.key 不可读），请检查文件权限')
+            else:
+                set_config('mail_smtp_password', encrypted)
+                saved += 1
+
+    return errors, saved
+
+
+def get_mail_config_for_display():
+    """取得用于页面展示的配置（密码打码）。
+
+    Returns:
+        tuple: (config dict, password_masked str, password_settable bool)
+    """
+    cfg = get_mail_config()
+
+    # 密码一律不出现在页面上，只告诉前端「有没有配」
+    if cfg.get('password_source') == 'env':
+        masked = '······（由 .env 提供，如需修改请编辑 .env 文件）'
+    elif cfg.get('password_source') == 'db':
+        masked = '······（已保存，留空表示不修改）'
+    else:
+        masked = ''
+
+    return cfg, masked, crypto_util.is_available()
+
+
+# --- 熔断状态 -------------------------------------------------------------
+
+def get_circuit_state():
+    """读取邮件熔断状态。
+
+    Returns:
+        dict: {'state': 'closed'|'open', 'reason': str,
+               'opened_at': str|None, 'resume_at': str|None, 'fail_streak': int}
+    """
+    raw = get_config('mail_circuit_state')
+    default = {'state': 'closed', 'reason': '', 'opened_at': None,
+               'resume_at': None, 'fail_streak': 0}
+    if not raw:
+        return default
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            default.update(parsed)
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
+def set_circuit_state(state, reason='', resume_at=None, fail_streak=0, opened_at=None):
+    """写入熔断状态。
+
+    Args:
+        state: 'closed'（正常） / 'open'（已熔断，停止发送）
+        reason: 熔断原因文案，展示给管理员
+        resume_at: 自动恢复时间 YYYY-MM-DD HH:MM:SS（通用熔断用）
+        fail_streak: 当前连续失败次数
+        opened_at: 熔断发生时间；state='open' 且未传时自动取当前时间
+    """
+    if state == 'open' and not opened_at:
+        opened_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if state == 'closed':
+        opened_at = None
+        resume_at = None
+        reason = ''
+        fail_streak = 0
+
+    set_config('mail_circuit_state', json.dumps({
+        'state': state,
+        'reason': reason,
+        'opened_at': opened_at,
+        'resume_at': resume_at,
+        'fail_streak': fail_streak,
+    }, ensure_ascii=False))
+
+
+def bump_fail_streak():
+    """连续失败计数 +1，返回新值。"""
+    state = get_circuit_state()
+    state['fail_streak'] = int(state.get('fail_streak') or 0) + 1
+    set_config('mail_circuit_state', json.dumps(state, ensure_ascii=False))
+    return state['fail_streak']
+
+
+def reset_fail_streak():
+    """发送成功后清零连续失败计数。"""
+    state = get_circuit_state()
+    if state.get('fail_streak'):
+        state['fail_streak'] = 0
+        set_config('mail_circuit_state', json.dumps(state, ensure_ascii=False))
+
+
+# --- B. 用户邮箱与订阅等级 -------------------------------------------------
+
+def update_user_email(user_id, email):
+    """更新用户邮箱（空串存 NULL）。"""
+    email = (email or '').strip()
+    db.execute(
+        "UPDATE users SET email = ? WHERE user_id = ?",
+        (email or None, user_id)
+    )
+
+
+def update_mail_notify_level(user_id, level):
+    """更新用户邮件订阅等级（非法值忽略）。"""
+    if level not in mail_constants.NOTIFY_LEVELS:
+        return False
+    db.execute(
+        "UPDATE users SET mail_notify_level = ? WHERE user_id = ?",
+        (level, user_id)
+    )
+    return True
+
+
+def get_mail_recipient(user_id):
+    """取一个可发邮件的用户（需启用且填了邮箱），否则返回 None。
+
+    D4-②：无邮箱 / 已停用的用户一律静默跳过，由状态页统一提示管理员。
+    """
+    if not user_id:
+        return None
+    row = db.query_one(
+        "SELECT user_id, display_name, email, mail_notify_level "
+        "FROM users WHERE user_id = ? AND is_active = 1",
+        (user_id,)
+    )
+    if not row or not (row['email'] or '').strip():
+        return None
+    return row
+
+
+def get_users_without_email():
+    """列出未填邮箱的启用用户（D4-②：状态页展示，供管理员补数据）。"""
+    return db.query(
+        "SELECT user_id, username, display_name, role FROM users "
+        "WHERE is_active = 1 AND (email IS NULL OR TRIM(email) = '') "
+        "ORDER BY display_name ASC"
+    )
+
+
+def user_wants_mail(user, mail_type):
+    """按订阅等级判断该用户是否接收这类邮件（C1-③④ + D6-②）。
+
+    Args:
+        user: 含 mail_notify_level 的用户行
+        mail_type: mail_constants 中的邮件类型
+
+    Returns:
+        bool
+    """
+    level = (user['mail_notify_level'] if 'mail_notify_level' in user.keys() else None) \
+        or mail_constants.LEVEL_OVERDUE
+    allowed = mail_constants.LEVEL_ALLOWED_TYPES.get(level, ())
+    return mail_type in allowed
+
+
+def get_mail_subscribers(role_filter=None):
+    """取得需要接收邮件的用户（启用 + 已填邮箱）。
+
+    Args:
+        role_filter: 'admin' 只取管理员，None 取全部
+    """
+    sql = ("SELECT user_id, display_name, email, mail_notify_level, role FROM users "
+           "WHERE is_active = 1 AND email IS NOT NULL AND TRIM(email) != ''")
+    params = ()
+    if role_filter:
+        sql += " AND role = ?"
+        params = (role_filter,)
+    sql += " ORDER BY user_id ASC"
+    return db.query(sql, params)
+
+
+# --- C. 发送队列 CRUD ------------------------------------------------------
+
+def enqueue_email(recipient_id, recipient_email, mail_type, subject, body,
+                  dedup_key, task_id=None, reply_to=None, operator_id=None,
+                  next_attempt_at=None):
+    """把一封邮件放进待发队列（已存在相同去重键则忽略）。
+
+    Args:
+        recipient_id: 收件人 user_id
+        recipient_email: 收件地址（发送时快照，避免事后改邮箱导致记录失真）
+        mail_type: mail_constants.MAIL_TYPE_*
+        subject / body: 邮件主题与正文
+        dedup_key: 去重键；相同键视为同一封，直接跳过（C6-②：独立于站内信）
+        task_id: 关联任务（日报为 None）
+        reply_to: 回复地址（B2-③：指向具体操作人）
+        operator_id: 操作人（H6-①：手动发送时记录，自动发送为 None）
+        next_attempt_at: 最早发送时间，默认立即
+
+    Returns:
+        int: 新记录的 queue_id；被去重键挡下时返回 None
+    """
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        return db.execute(
+            "INSERT INTO email_queue "
+            "(recipient_id, recipient_email, task_id, mail_type, subject, body, "
+            " reply_to, operator_id, dedup_key, status, retry_count, next_attempt_at, "
+            " created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)",
+            (recipient_id, recipient_email, task_id, mail_type, subject, body,
+             reply_to, operator_id, dedup_key,
+             next_attempt_at or now, now)
+        )
+    except Exception:
+        # UNIQUE 约束冲突 = 今天已经排过同一封，静默忽略即可
+        return None
+
+
+def has_dedup_key(dedup_key):
+    """判断去重键是否已存在（入队前预检，便于调用方直接跳过渲染开销）。"""
+    row = db.query_one(
+        "SELECT COUNT(*) as cnt FROM email_queue WHERE dedup_key = ?", (dedup_key,))
+    return row['cnt'] > 0
+
+
+def reset_stuck_emails():
+    """把卡在 sending 的记录重置为 pending（G5-①）。
+
+    程序被强杀时可能有记录停留在 sending。宁可重复发送、不可丢失邮件——
+    这是已确认的取舍：重复代价是收件人可能多收一封提醒，
+    丢失代价是管理员以为通知到位了而实际没有。
+    """
+    conn = db.get_db()
+    cursor = conn.execute(
+        "UPDATE email_queue SET status = 'pending' WHERE status = 'sending'")
+    conn.commit()
+    return cursor.rowcount
+
+
+def fetch_due_emails(limit):
+    """取出到期待发邮件（按收件人聚合的前提数据）。
+
+    Args:
+        limit: 最多取多少条记录（注意这是记录数，不是最终邮件数）
+
+    Returns:
+        list[Row]: 按创建时间升序的队列记录
+    """
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return db.query(
+        "SELECT * FROM email_queue "
+        "WHERE status = 'pending' AND next_attempt_at <= ? "
+        "ORDER BY created_at ASC LIMIT ?",
+        (now, limit)
+    )
+
+
+def mark_emails_sending(queue_ids):
+    """批量标记为发送中。"""
+    if not queue_ids:
+        return
+    placeholders = ','.join('?' * len(queue_ids))
+    conn = db.get_db()
+    conn.execute(
+        f"UPDATE email_queue SET status = 'sending' WHERE queue_id IN ({placeholders})",
+        tuple(queue_ids))
+    conn.commit()
+
+
+def mark_email_sent(queue_id, attempts=1):
+    """标记发送成功：写入历史表并从队列移除。
+
+    成功后直接从队列删除，让 email_queue 只保留 pending / sending 两种状态——
+    否则队列会无限堆积已完成的记录，拖慢扫描与备份。
+    历史查询一律走 email_log（I2-② 保留 90 天）。
+
+    注意：删除队列记录不影响手动发送冷却（F4-②），
+    因为 has_recent_manual_mail 同时查 email_queue 与 email_log。
+    """
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    row = db.query_one("SELECT * FROM email_queue WHERE queue_id = ?", (queue_id,))
+    if not row:
+        return
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO email_log "
+            "(recipient_id, recipient_email, task_id, mail_type, subject, operator_id, "
+            " success, error_message, attempts, created_at, finished_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?)",
+            (row['recipient_id'], row['recipient_email'], row['task_id'],
+             row['mail_type'], row['subject'], row['operator_id'],
+             attempts, row['created_at'], now))
+        conn.execute("DELETE FROM email_queue WHERE queue_id = ?", (queue_id,))
+
+
+def mark_email_failed(queue_id, error_message, retry_max, backoff, permanent=False):
+    """标记发送失败：可重试的排到下次，重试耗尽或永久错误则转历史表。
+
+    Args:
+        queue_id: 队列记录 ID
+        error_message: 错误信息（绝不含密码）
+        retry_max: 最大重试次数
+        backoff: 重试间隔分钟列表
+        permanent: True 表示永久性错误（如认证失败），不重试直接归档
+
+    Returns:
+        str: 'retrying' / 'failed'
+    """
+    now_dt = datetime.now()
+    now = now_dt.strftime('%Y-%m-%d %H:%M:%S')
+    row = db.query_one("SELECT * FROM email_queue WHERE queue_id = ?", (queue_id,))
+    if not row:
+        return 'failed'
+
+    # 注意这里是「>」而不是「>=」：
+    # retry_count 表示**已重试的次数**，不含首次发送。
+    # retry_max=3 的含义是「首次失败后再重试 3 次」，总共尝试 4 次。
+    # 用 >= 会变成只重试 2 次，与配置项的字面意思不符。
+    retry_count = int(row['retry_count'] or 0) + 1
+
+    if permanent or retry_count > retry_max:
+        # 归档到历史表并删除队列记录（避免队列无限膨胀）
+        with db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO email_log "
+                "(recipient_id, recipient_email, task_id, mail_type, subject, operator_id, "
+                " success, error_message, attempts, created_at, finished_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
+                (row['recipient_id'], row['recipient_email'], row['task_id'],
+                 row['mail_type'], row['subject'], row['operator_id'],
+                 error_message, retry_count, row['created_at'], now))
+            conn.execute("DELETE FROM email_queue WHERE queue_id = ?", (queue_id,))
+        return 'failed'
+
+    # 排到下一轮：间隔按重试次数递增，超出列表长度时用最后一项兜底
+    idx = min(retry_count - 1, len(backoff) - 1)
+    next_at = (now_dt + timedelta(minutes=backoff[idx])).strftime('%Y-%m-%d %H:%M:%S')
+    db.execute(
+        "UPDATE email_queue SET status = 'pending', retry_count = ?, "
+        "next_attempt_at = ?, last_error = ? WHERE queue_id = ?",
+        (retry_count, next_at, error_message, queue_id))
+    return 'retrying'
+
+
+def requeue_failed_email(log_id):
+    """把一条永久失败的历史邮件重新放回队列（G7-① 一键重发）。
+
+    Returns:
+        tuple: (成功与否 bool, 提示文案 str)
+    """
+    row = db.query_one("SELECT * FROM email_log WHERE log_id = ?", (log_id,))
+    if not row:
+        return False, '记录不存在'
+    if row['success']:
+        return False, '该邮件已发送成功，无需重发'
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # 去重键加时间戳后缀，避免与历史记录冲突导致插不进去
+    new_key = f"retry:{log_id}:{now}"
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO email_queue "
+            "(recipient_id, recipient_email, task_id, mail_type, subject, body, "
+            " reply_to, operator_id, dedup_key, status, retry_count, next_attempt_at, "
+            " created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)",
+            (row['recipient_id'], row['recipient_email'], row['task_id'],
+             row['mail_type'], row['subject'],
+             _rebuild_body_for_retry(row), None, row['operator_id'],
+             new_key, now, now))
+        conn.execute("DELETE FROM email_log WHERE log_id = ?", (log_id,))
+    return True, '已重新加入发送队列'
+
+
+def _rebuild_body_for_retry(log_row):
+    """重发时还原邮件正文。
+
+    历史表只存 subject 不存 body（省空间），因此重发时按类型重新渲染。
+    渲染失败则退化为含主题与提示的占位正文——重发是补救动作，
+    宁可内容简略也不能卡住。
+    """
+    try:
+        import mail_templates
+        if log_row['mail_type'] == mail_constants.MAIL_TYPE_DAILY_REPORT:
+            return mail_templates.render_daily_report_for_user(log_row['recipient_id'])
+        if log_row['task_id']:
+            task = get_task(log_row['task_id'])
+            if task:
+                return mail_templates.render_overdue_grouped(
+                    log_row['recipient_id'], [task], mask_title=False)
+    except Exception:
+        pass
+    return f"（原邮件正文未保留，此为重发）\n\n主题：{log_row['subject']}\n请登录督办系统查看详情。"
+
+
+# --- D. 发送历史与统计 -----------------------------------------------------
+
+def get_email_logs(filters=None, page=1, per_page=20):
+    """查询发送历史（管理员看全部）。
+
+    Args:
+        filters: dict，支持 status('success'/'failed') / recipient_id / mail_type / keyword
+        page / per_page: 分页
+
+    Returns:
+        tuple: (记录列表, 总条数, 总页数, 当前页)
+    """
+    if filters is None:
+        filters = {}
+
+    where = ['1=1']
+    params = []
+
+    status = filters.get('status')
+    if status == 'success':
+        where.append('l.success = 1')
+    elif status == 'failed':
+        where.append('l.success = 0')
+
+    if filters.get('recipient_id'):
+        where.append('l.recipient_id = ?')
+        params.append(filters['recipient_id'])
+
+    if filters.get('mail_type'):
+        where.append('l.mail_type = ?')
+        params.append(filters['mail_type'])
+
+    if filters.get('keyword'):
+        where.append('(l.subject LIKE ? OR l.recipient_email LIKE ?)')
+        kw = f"%{filters['keyword']}%"
+        params.extend([kw, kw])
+
+    where_sql = ' WHERE ' + ' AND '.join(where)
+
+    total = db.query_one(
+        f"SELECT COUNT(*) as cnt FROM email_log l{where_sql}", tuple(params))['cnt']
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+
+    offset = (page - 1) * per_page
+    rows = db.query(
+        "SELECT l.*, u.display_name AS recipient_name, t.title AS task_title "
+        "FROM email_log l "
+        "LEFT JOIN users u ON l.recipient_id = u.user_id "
+        "LEFT JOIN tasks t ON l.task_id = t.task_id "
+        f"{where_sql} ORDER BY l.finished_at DESC LIMIT ? OFFSET ?",
+        tuple(params) + (per_page, offset)
+    )
+    return rows, total, total_pages, page
+
+
+def get_my_email_logs(user_id, page=1, per_page=20):
+    """查询「发给我的」邮件记录（H2-①：普通用户只能看自己的）。"""
+    return get_email_logs({'recipient_id': user_id}, page=page, per_page=per_page)
+
+
+def get_failed_email_logs(limit=50):
+    """取得最近永久失败的邮件（G7-①：状态页失败清单 + 一键重发）。"""
+    return db.query(
+        "SELECT l.*, u.display_name AS recipient_name, t.title AS task_title "
+        "FROM email_log l "
+        "LEFT JOIN users u ON l.recipient_id = u.user_id "
+        "LEFT JOIN tasks t ON l.task_id = t.task_id "
+        "WHERE l.success = 0 ORDER BY l.finished_at DESC LIMIT ?",
+        (limit,)
+    )
+
+
+def count_emails_today():
+    """统计今日发送成功 / 失败数（I1-①：状态页概览）。"""
+    today = datetime.now().strftime('%Y-%m-%d')
+    row = db.query_one(
+        "SELECT "
+        "  SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS ok, "
+        "  SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS bad "
+        "FROM email_log WHERE finished_at LIKE ?",
+        (f"{today}%",)
+    )
+    return {'success': row['ok'] or 0, 'failed': row['bad'] or 0}
+
+
+def count_pending_emails():
+    """统计队列中待发 / 重试中的邮件数。"""
+    row = db.query_one(
+        "SELECT COUNT(*) as cnt FROM email_queue WHERE status IN ('pending', 'sending')")
+    return row['cnt'] or 0
+
+
+def get_last_sent_at():
+    """最近一次成功发送的时间（状态页展示）。"""
+    row = db.query_one(
+        "SELECT MAX(finished_at) AS last_at FROM email_log WHERE success = 1")
+    return row['last_at'] if row else None
+
+
+def cleanup_email_logs(retention_days=None):
+    """清理过期的发送历史（I2-②：默认保留 90 天）。
+
+    由调度器每日调用一次，避免 email_log 无限膨胀拖慢备份与拷贝。
+    """
+    if retention_days is None:
+        retention_days = config.MAIL_LOG_RETENTION_DAYS
+    if retention_days <= 0:
+        return 0
+
+    cutoff = (datetime.now() - timedelta(days=int(retention_days))).strftime('%Y-%m-%d %H:%M:%S')
+    conn = db.get_db()
+    cursor = conn.execute("DELETE FROM email_log WHERE created_at < ?", (cutoff,))
+    conn.commit()
+    return cursor.rowcount
+
+
+def get_overdue_tasks_with_names():
+    """取得全部逾期任务（附带负责人/创建人显示名），供邮件日报与提醒使用。
+
+    按负责人姓名、截止日期排序——日报要按负责人分组，
+    排序交给 SQL 做比在 Python 里二次排序更省事。
+    """
+    return db.query(
+        "SELECT t.*, "
+        "  u.display_name AS assignee_name, "
+        "  c.display_name AS creator_name "
+        "FROM tasks t "
+        "LEFT JOIN users u ON t.assignee = u.user_id "
+        "LEFT JOIN users c ON t.created_by = c.user_id "
+        "WHERE t.status = 'overdue' "
+        "ORDER BY u.display_name ASC, t.due_date ASC"
+    )
+
+
+def get_overdue_tasks_by_assignee():
+    """取得逾期任务并按负责人归组。
+
+    Returns:
+        dict: {assignee_user_id: [task, ...]}
+    """
+    grouped = {}
+    for task in get_overdue_tasks_with_names():
+        grouped.setdefault(task['assignee'], []).append(task)
+    return grouped
+
+
+def has_recent_manual_mail(task_id, operator_id, cooldown_seconds):
+    """手动发送冷却检查（F4-②）。
+
+    判定依据：在冷却窗口内，该任务 + 该操作人是否已经发过（含待发队列与历史）。
+    """
+    if not cooldown_seconds or cooldown_seconds <= 0:
+        return False
+
+    since = (datetime.now() - timedelta(seconds=int(cooldown_seconds))).strftime('%Y-%m-%d %H:%M:%S')
+
+    row = db.query_one(
+        "SELECT COUNT(*) as cnt FROM email_queue "
+        "WHERE mail_type = ? AND task_id = ? AND operator_id = ? AND created_at >= ?",
+        (mail_constants.MAIL_TYPE_MANUAL, task_id, operator_id, since))
+    if row['cnt'] > 0:
+        return True
+
+    row = db.query_one(
+        "SELECT COUNT(*) as cnt FROM email_log "
+        "WHERE mail_type = ? AND task_id = ? AND operator_id = ? AND created_at >= ?",
+        (mail_constants.MAIL_TYPE_MANUAL, task_id, operator_id, since))
+    return row['cnt'] > 0

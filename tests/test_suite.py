@@ -56,7 +56,9 @@ import db
 import models
 import auth
 import csrf
+import crypto_util
 import state_machine
+import mail_constants
 from state_machine import (
     TaskStatus, STATUS_LABELS, TRANSITIONS, ADMIN_ONLY_TRANSITIONS,
     validate_transition, get_allowed_transitions, change_task_status,
@@ -159,10 +161,13 @@ def reset_database():
     V2：evidence / blockers 两张新表也一并清空——tasks 表 DROP 后自增 ID
     从 1 重新开始，若不清空这两张表会残留指向旧 task_id 的脏数据。
     """
+    # email_queue / email_log 一并清空：这两张表跨测试残留会让
+    # 「队列中待发 = 0」「发送记录为空」这类断言随机失败。
     conn = db.get_db()
     conn.execute('PRAGMA foreign_keys = OFF')
     for table in ['messages', 'progress_logs', 'evidence', 'blockers',
-                  'tasks', 'users', 'system_config']:
+                  'tasks', 'users', 'system_config',
+                  'email_queue', 'email_log']:
         conn.execute('DROP TABLE IF EXISTS ' + table)
     conn.commit()
     conn.execute('PRAGMA foreign_keys = ON')
@@ -2973,6 +2978,571 @@ class TestCSRF(unittest.TestCase):
             if 'csrfHeaders' not in chunk:
                 bad.append(chunk.split('\n')[0][:60])
         self.assertEqual(bad, [], '以下 AJAX 写请求没有带 CSRF 令牌: ' + '; '.join(bad))
+
+
+# ============================================================
+# 20. V4 邮件设置页：配置、状态、记录、失败重发
+# ============================================================
+
+# 连本机 1 号端口：连接会被立刻拒绝，既不会真的发出邮件，
+# 也不会像解析不存在的域名那样去等 DNS 超时。
+MAIL_CFG_FORM = {
+    'enabled': '1',
+    'smtp_host': '127.0.0.1',
+    'smtp_port': '1',
+    'smtp_username': 'notice@example.com',
+    'smtp_password': 'smtp-pass-123',
+    'use_ssl': '1',
+    'from_addr': 'notice@example.com',
+    'from_name': '督办系统',
+    'footer': '本邮件由督办系统自动发送',
+    'batch_limit': '20',
+    'retry_max': '3',
+    'manual_cooldown': '300',
+}
+
+
+class TestMailSettings(unittest.TestCase):
+    """V4 邮件设置页：配置保存与校验、状态展示、记录查询、失败重发。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app()
+        cls.app.config['TESTING'] = True
+
+    def setUp(self):
+        reset_database()
+        self.client = make_client(self.app)
+        self.admin_id = create_test_user('admin', '管理员',
+                                         password='admin123456', role='admin')
+        self.owner_id = create_test_user('owner', '张三',
+                                         password='owner123456', role='owner')
+        self._login('admin', 'admin123456')
+
+    def _login(self, username, password):
+        return self.client.post(
+            '/login', data={'username': username, 'password': password},
+            follow_redirects=False)
+
+    def _html(self, resp):
+        return resp.data.decode('utf-8')
+
+    def _save(self, **overrides):
+        """提交配置表单（可在 MAIL_CFG_FORM 基础上覆盖字段）。
+
+        值为 None 表示「该字段不出现在表单里」——真实浏览器里未勾选的
+        复选框根本不会提交，而路由侧判断的是键是否存在（不是值），
+        所以这里必须真的把键删掉；传空字符串只会让键继续存在，
+        模拟不出取消勾选的效果。
+        """
+        data = dict(MAIL_CFG_FORM)
+        for key, value in overrides.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
+        return self.client.post('/mail/config', data=data, follow_redirects=True)
+
+    def _log(self, recipient_id, email, mail_type, subject, success=1, error=None):
+        """直接落一条发送历史。"""
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return db.execute(
+            "INSERT INTO email_log (recipient_id, recipient_email, task_id, mail_type,"
+            " subject, operator_id, success, error_message, attempts, created_at,"
+            " finished_at) VALUES (?,?,NULL,?,?,?,?,?,1,?,?)",
+            (recipient_id, email, mail_type, subject, self.admin_id,
+             success, error, now, now))
+
+    # --- 权限 ---
+
+    def test_status_page_requires_admin(self):
+        """普通用户访问 /mail 应被拒（P-1 配置仅管理员可见）。"""
+        self.client.get('/logout')
+        self._login('owner', 'owner123456')
+        self.assertEqual(self.client.get('/mail').status_code, 403)
+
+    def test_status_page_requires_login(self):
+        """未登录访问 /mail 应跳转登录。"""
+        self.client.get('/logout')
+        resp = self.client.get('/mail')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.headers.get('Location', ''))
+
+    # --- 未配置时的展示 ---
+
+    def test_unconfigured_shows_banner_with_reason(self):
+        """未配置时页面顶部常驻红条，且给出具体原因（B5-②）。"""
+        html = self._html(self.client.get('/mail'))
+        self.assertIn('邮件功能当前不可用', html)
+        self.assertIn('邮件功能未启用', html)   # 默认 MAIL_ENABLED=False
+
+    def test_default_mail_disabled(self):
+        """铁律：不配置 = 行为不变。默认必须关闭，否则离线包会去连 SMTP。"""
+        self.assertFalse(models.get_mail_config()['enabled'])
+        self.assertFalse(models.is_mail_configured())
+
+    # --- 配置保存 ---
+
+    def test_save_config_persists(self):
+        """保存后各项应能读回。"""
+        self._save()
+        cfg = models.get_mail_config()
+        self.assertEqual(cfg['smtp_host'], '127.0.0.1')
+        self.assertEqual(cfg['smtp_port'], 1)
+        self.assertEqual(cfg['from_addr'], 'notice@example.com')
+        self.assertTrue(cfg['use_ssl'])
+        self.assertTrue(cfg['enabled'])
+        self.assertTrue(models.is_mail_configured())
+
+    def test_password_stored_encrypted(self):
+        """密码必须加密入库，且能解回原文（P-9）。"""
+        self._save()
+        stored = models.get_config('mail_smtp_password', '')
+        self.assertNotIn('smtp-pass-123', stored, '密码不应以明文落库')
+        self.assertEqual(models.get_mail_config()['smtp_password'], 'smtp-pass-123')
+
+    def test_password_blank_keeps_previous(self):
+        """密码框留空 = 不修改（否则每次保存配置都要重填授权码）。"""
+        self._save()
+        self._save(smtp_password='', smtp_host='smtp.other.com')
+        self.assertEqual(models.get_mail_config()['smtp_password'], 'smtp-pass-123')
+
+    def test_password_never_rendered(self):
+        """页面上绝不能出现明文密码（P-7）。"""
+        self._save()
+        html = self._html(self.client.get('/mail'))
+        self.assertNotIn('smtp-pass-123', html)
+
+    def test_unchecking_checkbox_persists(self):
+        """回归：复选框未勾选时不出现在 form 里，服务端必须显式补 0。
+
+        否则「取消启用」会因为键缺失而保存不进去，开关卡死在开启状态。
+        """
+        self._save()
+        self.assertTrue(models.get_mail_config()['enabled'])
+        self._save(enabled=None)   # 模拟未勾选：键不出现在 form 里
+        self.assertFalse(models.get_mail_config()['enabled'])
+
+    def test_invalid_port_rejected(self):
+        """端口越界应拒绝且不污染已存配置。"""
+        self._save()
+        resp = self._save(smtp_port='99999')
+        self.assertIn('SMTP 端口应在 1-65535 之间', self._html(resp))
+        self.assertEqual(models.get_mail_config()['smtp_host'], '127.0.0.1')
+
+    def test_ssl_and_tls_mutex(self):
+        """SSL 与 STARTTLS 同时勾选应被拒。"""
+        resp = self._save(use_ssl='1', use_tls='1')
+        self.assertIn('只能选一种', self._html(resp))
+
+    def test_invalid_from_addr_rejected(self):
+        """发件箱地址缺 @ 应被拒。"""
+        resp = self._save(from_addr='not-an-email')
+        self.assertIn('发件箱地址格式不正确', self._html(resp))
+
+    def test_batch_limit_range(self):
+        """单轮发送上限越界应被拒。"""
+        self.assertIn('单轮发送上限', self._html(self._save(batch_limit='0')))
+
+    def test_retry_max_range(self):
+        """重试次数越界应被拒。"""
+        self.assertIn('重试次数', self._html(self._save(retry_max='9')))
+
+    def test_manual_cooldown_range(self):
+        """手动冷却越界应被拒。"""
+        self.assertIn('手动发送冷却', self._html(self._save(manual_cooldown='9999')))
+
+    def test_env_locked_hint(self):
+        """被 .env 锁定的配置项要在页面上标注，避免「保存了没变化」的假故障。"""
+        os.environ['MAIL_ENABLED'] = '0'
+        try:
+            html = self._html(self.client.get('/mail'))
+            self.assertIn('已被 .env / 系统环境变量锁定', html)
+            self.assertIn('enabled', html)
+        finally:
+            del os.environ['MAIL_ENABLED']
+
+    # --- 未填邮箱名单 ---
+
+    def test_users_without_email_listed(self):
+        """未填邮箱的用户应出现在名单里（D4-②）。"""
+        html = self._html(self.client.get('/mail'))
+        self.assertIn('位用户未填写邮箱', html)
+        self.assertIn('张三', html)
+
+    def test_admin_can_fill_user_email(self):
+        """管理员可代填邮箱，填完即从名单移出。"""
+        self.client.post('/mail/users/%d/email' % self.owner_id,
+                         data={'email': 'zhangsan@example.com'},
+                         follow_redirects=True)
+        self.assertEqual(models.get_user(self.owner_id)['email'],
+                         'zhangsan@example.com')
+        left = [u['user_id'] for u in models.get_users_without_email()]
+        self.assertNotIn(self.owner_id, left)
+
+    def test_fill_user_email_validates_format(self):
+        """代填邮箱需过基本格式校验。"""
+        self.client.post('/mail/users/%d/email' % self.owner_id,
+                         data={'email': 'bad'}, follow_redirects=True)
+        self.assertIsNone(models.get_user(self.owner_id)['email'])
+
+    # --- 界面入口与展示细节 ---
+
+    def test_nav_mail_entry_admin_only(self):
+        """导航栏「邮件」入口只对管理员渲染（P-1）。
+
+        用 href 而不是「邮件」二字做断言：状态页里「邮件」出现十几次，
+        拿文字判断等于没验证。
+        """
+        self.assertIn('href="/mail"', self._html(self.client.get('/tasks')))
+
+        self.client.get('/logout')
+        self._login('owner', 'owner123456')
+        self.assertNotIn('href="/mail"', self._html(self.client.get('/tasks')))
+
+    def test_configured_shows_enabled_badge(self):
+        """配置齐全后横幅撤下、徽标转为「已启用」。"""
+        self.assertIn('未启用', self._html(self.client.get('/mail')))
+        self._save()
+        html = self._html(self.client.get('/mail'))
+        self.assertNotIn('邮件功能当前不可用', html)
+        self.assertIn('已启用', html)
+
+    def test_profile_page_shows_mail_section(self):
+        """个人设置页要能看到邮箱、订阅等级与「我的邮件记录」入口。"""
+        html = self._html(self.client.get('/settings/profile'))
+        self.assertIn('邮件通知', html)
+        self.assertIn('查看我的邮件记录', html)
+        self.assertIn('mail_notify_level', html)
+        for label in mail_constants.NOTIFY_LEVEL_LABELS.values():
+            self.assertIn(label, html)
+
+    def _log_card_count(self, html):
+        """从「发送记录（共 N 条）」卡标题里取出条数。
+
+        不能直接用「某主题是否出现」判断筛选是否生效——失败件不管怎么筛
+        都会出现在上方独立的「发送失败清单」卡里，按文字断言永远为真。
+        """
+        m = re.search(r'发送记录（共\s*(\d+)\s*条）', html)
+        return int(m.group(1)) if m else -1
+
+    def test_logs_filter_by_status(self):
+        """按成功/失败结果筛选应命中（关键字与类型之外最常用的维度）。"""
+        self._log(self.admin_id, 'ok@example.com',
+                  mail_constants.MAIL_TYPE_TEST, '成功的一封')
+        self._log(self.admin_id, 'bad@example.com',
+                  mail_constants.MAIL_TYPE_TEST, '失败的一封',
+                  success=0, error='550')
+
+        self.assertEqual(self._log_card_count(self._html(
+            self.client.get('/mail'))), 2)
+
+        ok_html = self._html(self.client.get('/mail?status=success'))
+        self.assertEqual(self._log_card_count(ok_html), 1)
+        self.assertIn('成功的一封', ok_html)
+
+        bad_html = self._html(self.client.get('/mail?status=failed'))
+        self.assertEqual(self._log_card_count(bad_html), 1)
+        self.assertIn('失败的一封', bad_html)
+
+    # --- 熔断 ---
+
+    def test_circuit_open_shows_banner_and_resume(self):
+        """熔断时要显示原因与恢复入口（G3-③：认证失败需人工恢复）。
+
+        先配置好邮件再熔断：横幅是「未配置 → 熔断」的 if/elif 结构，
+        未配置时顶部要先讲清「功能压根没开」，否则管理员会先去
+        排查一个根本不会发送的系统为什么熔断了。
+        """
+        self._save()
+        models.set_circuit_state('open', reason='SMTP 认证失败：535', fail_streak=3)
+        html = self._html(self.client.get('/mail'))
+        self.assertIn('邮件发送已熔断', html)
+        self.assertIn('SMTP 认证失败：535', html)
+        self.assertIn('需人工恢复', html)
+
+        self.client.post('/mail/circuit/resume', follow_redirects=True)
+        self.assertEqual(models.get_circuit_state()['state'], 'closed')
+
+    def test_unconfigured_takes_precedence_over_circuit(self):
+        """未配置时顶部横幅讲「未启用」，但熔断详情卡仍要渲染。
+
+        管理员可能在熔断后关掉了邮件功能，再回来时如果只看得到
+        「未启用」，就会以为熔断已经解除，重新启用后才发现还在暂停。
+        """
+        models.set_circuit_state('open', reason='SMTP 认证失败：535', fail_streak=3)
+        html = self._html(self.client.get('/mail'))
+        self.assertIn('邮件功能当前不可用', html)
+        self.assertNotIn('邮件发送已熔断', html)
+        self.assertIn('SMTP 认证失败：535', html)   # 详情卡仍在
+
+    # --- 发送记录 ---
+
+    def test_logs_filter_by_type_and_keyword(self):
+        """按类型 + 关键字筛选应命中。"""
+        self._log(self.admin_id, 'a@example.com',
+                  mail_constants.MAIL_TYPE_TEST, '[督办系统] 测试邮件：配置验证')
+        self._log(self.admin_id, 'b@example.com',
+                  mail_constants.MAIL_TYPE_OVERDUE, '[督办] 逾期提醒：某任务')
+
+        html = self._html(self.client.get('/mail?mail_type=test&keyword=测试'))
+        self.assertIn('测试邮件：配置验证', html)
+        self.assertNotIn('逾期提醒：某任务', html)
+
+    def test_logs_pagination_out_of_range(self):
+        """越界/非法页码应回退到有效页，不能 500。"""
+        self.assertEqual(self.client.get('/mail?page=99').status_code, 200)
+        self.assertEqual(self.client.get('/mail?page=abc').status_code, 200)
+
+    # --- 失败清单与重发 ---
+
+    def test_failed_list_and_requeue(self):
+        """失败邮件出现在清单里，一键重发后回到队列（G7-①）。"""
+        log_id = self._log(self.owner_id, 'zhangsan@example.com',
+                           mail_constants.MAIL_TYPE_OVERDUE, '[督办] 逾期提醒',
+                           success=0, error='550 收件人不存在')
+        html = self._html(self.client.get('/mail'))
+        self.assertIn('发送失败清单', html)
+        self.assertIn('550 收件人不存在', html)
+
+        resp = self.client.post('/mail/log/%d/requeue' % log_id,
+                                follow_redirects=True)
+        self.assertIn('已重新加入发送队列', self._html(resp))
+        self.assertGreaterEqual(models.count_pending_emails(), 1)
+
+    def test_requeue_success_rejected(self):
+        """已成功的邮件不允许重发，避免重复骚扰收件人。"""
+        log_id = self._log(self.admin_id, 'a@example.com',
+                           mail_constants.MAIL_TYPE_TEST, '[督办系统] 测试邮件')
+        resp = self.client.post('/mail/log/%d/requeue' % log_id,
+                                follow_redirects=True)
+        self.assertIn('已发送成功', self._html(resp))
+
+    # --- 运维操作 ---
+
+    def test_scan_empty_queue(self):
+        """队列为空时立即扫描应给出明确提示，而不是静默无反馈。"""
+        self._save()
+        models.set_circuit_state('closed')
+        resp = self.client.post('/mail/scan', follow_redirects=True)
+        self.assertIn('队列中没有待发送的邮件', self._html(resp))
+
+    def test_send_test_mail_without_config(self):
+        """未配置时点测试邮件应给出可执行的提示，不抛异常（B5-① 静默降级）。"""
+        resp = self.client.post('/mail/test', follow_redirects=True)
+        self.assertIn('未启用', self._html(resp))
+
+    # --- 普通用户视图 ---
+
+    def test_my_mails_requires_login(self):
+        """未登录访问「我的邮件记录」应跳转登录。"""
+        self.client.get('/logout')
+        resp = self.client.get('/mail/my')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_my_mails_shows_only_mine(self):
+        """H2-①：普通用户只能看到发给自己的，看不到别人的。"""
+        self._log(self.admin_id, 'admin@example.com',
+                  mail_constants.MAIL_TYPE_TEST, '[督办系统] 发给管理员的测试邮件')
+        self._log(self.owner_id, 'zhangsan@example.com',
+                  mail_constants.MAIL_TYPE_TEST, '[督办系统] 发给张三的测试邮件')
+
+        html = self._html(self.client.get('/mail/my'))
+        self.assertIn('发给管理员的测试邮件', html)
+        self.assertNotIn('发给张三的测试邮件', html)
+
+    def test_save_email_preference(self):
+        """个人设置可保存邮箱与订阅等级。"""
+        resp = self.client.post('/settings/mail', data={
+            'email': 'admin@example.com',
+            'mail_notify_level': mail_constants.LEVEL_OVERDUE_DUE,
+        }, follow_redirects=True)
+        self.assertIn('邮件通知设置已保存', self._html(resp))
+        self.assertEqual(models.get_user(self.admin_id)['email'], 'admin@example.com')
+        self.assertEqual(models.get_user(self.admin_id)['mail_notify_level'],
+                         mail_constants.LEVEL_OVERDUE_DUE)
+
+    def test_save_email_preference_validates(self):
+        """个人邮箱格式非法应被拒，且不改动已有值。"""
+        models.update_user_email(self.admin_id, 'admin@example.com')
+        self.client.post('/settings/mail',
+                         data={'email': 'bad', 'mail_notify_level': 'overdue'},
+                         follow_redirects=True)
+        self.assertEqual(models.get_user(self.admin_id)['email'], 'admin@example.com')
+
+    def test_crypto_unavailable_message(self):
+        """加密不可用时保存密码应给出清晰提示，而不是静默失败。"""
+        real = crypto_util._derive_master_key
+        try:
+            crypto_util._derive_master_key = lambda: None
+            resp = self._save()
+            self.assertIn('加密不可用', self._html(resp))
+        finally:
+            crypto_util._derive_master_key = real
+
+
+# ============================================================
+# 21. V4 手动发送提醒邮件（任务详情页按钮）
+# ============================================================
+
+class TestManualMailSend(unittest.TestCase):
+    """V4 手动发送：按钮渲染权限、冷却、AJAX 与整页两种响应形态。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app()
+        cls.app.config['TESTING'] = True
+
+    def setUp(self):
+        reset_database()
+        self.client = make_client(self.app)
+        self.admin_id = create_test_user('admin', '管理员',
+                                         password='admin123456', role='admin')
+        self.creator_id = create_test_user('creator', '布置人',
+                                           password='creator123456', role='owner')
+        self.owner_id = create_test_user('owner', '张三',
+                                         password='owner123456', role='owner')
+        # 由 creator 创建、张三负责：用于验证「创建人也能催办」
+        self.task_id = create_task_direct('待催办任务', self.creator_id, self.owner_id)
+        models.update_user_email(self.owner_id, 'zhangsan@example.com')
+
+    def _login(self, username, password):
+        return self.client.post(
+            '/login', data={'username': username, 'password': password},
+            follow_redirects=False)
+
+    def _html(self, resp):
+        return resp.data.decode('utf-8')
+
+    def _configure_mail(self):
+        """开启邮件并指向本机 1 号端口（连接会被立刻拒绝，不产生真实外发）。"""
+        for key, value in MAIL_CFG_FORM.items():
+            models.set_config('mail_' + key, value)
+        models.set_config('mail_smtp_password',
+                          crypto_util.encrypt('smtp-pass-123'))
+        models.set_circuit_state('closed')
+
+    # --- 按钮渲染 ---
+
+    def test_admin_sees_mail_block_in_drawer(self):
+        """管理员在抽屉里应看到邮件提醒区块。"""
+        self._configure_mail()
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/tasks/%d/drawer' % self.task_id))
+        self.assertIn('邮件提醒', html)
+        self.assertIn('发送提醒邮件给负责人', html)
+
+    def test_creator_sees_mail_block(self):
+        """H1-②：任务创建人也可以催办。"""
+        self._configure_mail()
+        self._login('creator', 'creator123456')
+        html = self._html(self.client.get('/tasks/%d/drawer' % self.task_id))
+        self.assertIn('发送提醒邮件给负责人', html)
+
+    def test_plain_owner_does_not_see_mail_block(self):
+        """H1-②：既非管理员也非创建人的负责人不应看到按钮（不能自己催自己）。"""
+        self._configure_mail()
+        self._login('owner', 'owner123456')
+        html = self._html(self.client.get('/tasks/%d/drawer' % self.task_id))
+        self.assertNotIn('发送提醒邮件给负责人', html)
+
+    def test_unconfigured_shows_hint_not_button(self):
+        """未配置邮件时按钮位置显示说明文案，而不是消失（让操作人知道有这功能）。"""
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/tasks/%d/drawer' % self.task_id))
+        self.assertIn('邮件提醒', html)
+        self.assertNotIn('发送提醒邮件给负责人', html)
+        self.assertIn('未启用', html)
+
+    def test_detail_page_shows_mail_block(self):
+        """整页详情页同样提供邮件提醒入口。"""
+        self._configure_mail()
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/tasks/%d' % self.task_id))
+        self.assertIn('发送提醒邮件给负责人', html)
+
+    # --- 发送行为 ---
+
+    def test_ajax_send_returns_json(self):
+        """AJAX 提交返回 JSON，由前端弹 Toast。"""
+        self._configure_mail()
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/tasks/%d/send-mail' % self.task_id, json={'note': '请尽快反馈'},
+            headers={'X-Requested-With': 'XMLHttpRequest'})
+        self.assertTrue(resp.is_json)
+        body = resp.get_json()
+        self.assertIn('success', body)
+        self.assertIn('message', body)
+
+    def test_fullpage_send_redirects_with_flash(self):
+        """整页表单提交应重定向 + flash，不能返回一屏 JSON。"""
+        self._configure_mail()
+        self._login('admin', 'admin123456')
+        resp = self.client.post('/tasks/%d/send-mail' % self.task_id,
+                                data={'note': '请尽快反馈'},
+                                follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+
+    def test_send_failure_returns_202_and_keeps_in_queue(self):
+        """发送失败（连不上 SMTP）时返回 202 并把记录留在队列里等后台重试。"""
+        self._configure_mail()
+        self._login('admin', 'admin123456')
+        resp = self.client.post('/tasks/%d/send-mail' % self.task_id,
+                                json={'note': 'x'},
+                                headers={'X-Requested-With': 'XMLHttpRequest'})
+        self.assertEqual(resp.status_code, 202)
+        self.assertIn('已加入发送队列', resp.get_json()['message'])
+        self.assertGreaterEqual(models.count_pending_emails(), 1)
+
+    def test_send_forbidden_for_non_creator(self):
+        """非管理员且非创建人调用接口应 403。"""
+        self._configure_mail()
+        self._login('owner', 'owner123456')
+        resp = self.client.post('/tasks/%d/send-mail' % self.task_id,
+                                json={'note': 'x'},
+                                headers={'X-Requested-With': 'XMLHttpRequest'})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_send_requires_login(self):
+        """未登录调用发送接口应跳转登录。"""
+        self._configure_mail()
+        resp = self.client.post('/tasks/%d/send-mail' % self.task_id, json={})
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.headers.get('Location', ''))
+
+    def test_send_rejected_when_mail_unconfigured(self):
+        """邮件未配置时发送接口应明确拒绝，而不是入队后永远发不出去。"""
+        self._login('admin', 'admin123456')
+        resp = self.client.post('/tasks/%d/send-mail' % self.task_id,
+                                json={'note': 'x'},
+                                headers={'X-Requested-With': 'XMLHttpRequest'})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_cooldown_blocks_repeat_send(self):
+        """F4-②：冷却窗口内重复发送应被拒，防止手抖刷屏。"""
+        self._configure_mail()
+        self._login('admin', 'admin123456')
+        url = '/tasks/%d/send-mail' % self.task_id
+
+        first = self.client.post(url, json={'note': '第一次'},
+                                 headers={'X-Requested-With': 'XMLHttpRequest'})
+        self.assertEqual(first.status_code, 202)   # 连不上 SMTP，入队待重试
+
+        second = self.client.post(url, json={'note': '第二次'},
+                                  headers={'X-Requested-With': 'XMLHttpRequest'})
+        self.assertEqual(second.status_code, 400)
+        self.assertIn('发送过于频繁', second.get_json()['message'])
+
+    def test_cooldown_disables_button(self):
+        """冷却期内抽屉里的按钮应被禁用并给出说明。"""
+        self._configure_mail()
+        self._login('admin', 'admin123456')
+        self.client.post('/tasks/%d/send-mail' % self.task_id, json={'note': 'x'},
+                         headers={'X-Requested-With': 'XMLHttpRequest'})
+        html = self._html(self.client.get('/tasks/%d/drawer' % self.task_id))
+        self.assertIn('冷却中', html)
+        self.assertIn('disabled', html)
 
 
 # ============================================================

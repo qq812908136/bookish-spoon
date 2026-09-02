@@ -32,6 +32,7 @@ from datetime import datetime
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, Response
 
 import config
+import mail_dispatcher
 import models
 import auth
 from auth import login_required, admin_required, get_current_user, can_edit_task, can_delete_task
@@ -174,12 +175,9 @@ def task_new():
 
         # 生成任务指派消息通知负责人（如果负责人不是创建人自己）
         if int(assignee) != user['user_id']:
-            models.create_message(
-                recipient=int(assignee),
-                sender=user['user_id'],
-                msg_type='assignment',
-                content=f'{user["display_name"]} 给你指派了新任务「{title}」',
-                task_id=task_id,
+            _notify_assignment(
+                task_id, user, int(assignee),
+                f'{user["display_name"]} 给你指派了新任务「{title}」',
             )
 
         flash(f'任务「{title}」创建成功', 'success')
@@ -241,6 +239,7 @@ def task_detail(task_id):
         current_user=user,
         can_edit=can_edit_task(task, user),
         can_delete=can_delete_task(task, user),
+        **_mail_button_context(task, user),
     )
 
 
@@ -609,12 +608,9 @@ def task_batch():
             )
             # 生成指派消息通知新负责人（如果新负责人不是操作人自己）
             if int(new_assignee) != user['user_id']:
-                models.create_message(
-                    recipient=int(new_assignee),
-                    sender=user['user_id'],
-                    msg_type='assignment',
-                    content='{} 通过批量指派把任务「{}」转交给你'.format(user['display_name'], task['title']),
-                    task_id=tid,
+                _notify_assignment(
+                    tid, user, int(new_assignee),
+                    '{} 通过批量指派把任务「{}」转交给你'.format(user['display_name'], task['title']),
                 )
             success_count += 1
 
@@ -722,6 +718,7 @@ def task_drawer(task_id):
         current_user=user,
         can_edit=can_edit_task(task, user),
         can_delete=can_delete_task(task, user),
+        **_mail_button_context(task, user),
     )
 
 
@@ -796,12 +793,9 @@ def task_field(task_id):
 
     # 负责人变更时给新负责人发通知
     if field == 'assignee' and value != task['assignee'] and value != user['user_id']:
-        models.create_message(
-            recipient=value,
-            sender=user['user_id'],
-            msg_type='assignment',
-            content='{} 把任务「{}」转交给你'.format(user['display_name'], task['title']),
-            task_id=task_id,
+        _notify_assignment(
+            task_id, user, value,
+            '{} 把任务「{}」转交给你'.format(user['display_name'], task['title']),
         )
 
     result = {'success': True, 'message': '已保存'}
@@ -921,6 +915,72 @@ def _brief(text, limit=50):
     if len(text) <= limit:
         return text
     return text[:limit] + '…'
+
+
+def _mail_button_context(task, user):
+    """算出「手动发送提醒邮件」按钮的渲染参数（抽屉与整页详情共用）。
+
+    未配置邮件时按钮仍然渲染，只是换成说明文案——对操作人来说，
+    看见「有这个功能、但要管理员先配置」比压根没有这个入口更有用。
+
+    Returns:
+        dict: can_send_mail / mail_ready / mail_cooling / mail_cooldown_min
+    """
+    cfg = models.get_mail_config()
+    mail_ready = models.is_mail_configured(cfg)
+
+    # H1-②：管理员 + 任务创建人。负责人给自己发提醒没有意义，
+    # 但「我布置的任务我来催」是最常见场景，只给管理员会绕远路。
+    can_send_mail = user['role'] == 'admin' or task['created_by'] == user['user_id']
+
+    cooldown = int(cfg.get('manual_cooldown') or 0)
+    mail_cooling = bool(
+        can_send_mail and mail_ready and cooldown > 0
+        and models.has_recent_manual_mail(task['task_id'], user['user_id'], cooldown)
+    )
+
+    return {
+        'can_send_mail': can_send_mail,
+        'mail_ready': mail_ready,
+        'mail_cooling': mail_cooling,
+        'mail_cooldown_min': max(1, round(cooldown / 60)) if cooldown else 0,
+    }
+
+
+def _notify_assignment(task_id, operator, assignee_id, message):
+    """任务分配 / 改派后的通知：站内信 + 邮件双通道。
+
+    站内信照旧由调用方写好文案经本函数发出；邮件则在函数内部
+    委托 mail_dispatcher 入队（C5-①：分配是任务生命周期的起点，
+    负责人不上系统看就永远不知道自己多了个任务）。
+
+    邮件是**附加通道**，任何异常都不允许影响站内信与业务主流程——
+    所以这里单独 try/except 吞掉并打印，与 task_routes 既有的
+    「留痕失败不阻断主操作」风格保持一致。
+
+    Args:
+        task_id: 任务 ID
+        operator: 操作人用户行（需含 user_id / display_name / email）
+        assignee_id: 新负责人 user_id
+        message: 站内信正文
+    """
+    models.create_message(
+        recipient=assignee_id,
+        sender=operator['user_id'],
+        msg_type='assignment',
+        content=message,
+        task_id=task_id,
+    )
+
+    try:
+        mail_dispatcher.enqueue_assignment(
+            task_id,
+            operator_id=operator['user_id'],
+            is_transfer=True,
+            operator_email=(operator['email'] or None) if 'email' in operator.keys() else None,
+        )
+    except Exception as e:  # pragma: no cover - 邮件失败不影响业务
+        print(f'[mail] 分配通知邮件入队失败: {e}')
 
 
 def _log_timeline(task_id, operator, note):
@@ -1121,3 +1181,86 @@ def task_remind():
         task_id=int(task_id) if task_id else None,
     )
     return jsonify({'success': True, 'message': '已发送督办提醒'})
+
+
+@task_bp.route('/tasks/<int:task_id>/send-mail', methods=['POST'])
+@login_required
+def task_send_mail(task_id):
+    """手动发送提醒邮件（V4，C3-① 任务详情页按钮）。
+
+    权限（H1-②）：管理员 + 该任务的创建人。
+        —— 负责人不需要邮件提醒自己，逻辑上说不通；
+        —— 只给管理员会让「我布置的任务我来催」这种最常见场景绕远路。
+
+    流程：入队（拿冷却与审计）→ 立刻同步发送这一条 → 返回真实结果。
+        同步发送是为了让操作人当场知道有没有发出去；
+        万一同步失败也没关系，记录留在队列里由后台自动重试（G1）。
+
+    请求参数（form 或 JSON）：
+        note: 可选留言，≤200 字纯文本（H4-②）
+
+    响应形态随调用方自动切换：
+        AJAX（抽屉里的 .drawer-form）→ JSON，由 main.js 弹 Toast；
+        整页表单（/tasks/<id> 详情页）→ flash + 跳回原页面，
+        否则用户点完按钮会看到一屏原始 JSON。
+    """
+    user = get_current_user()
+    task = models.get_task(task_id)
+    if not task:
+        return _mail_result(task_id, {'success': False, 'message': '任务不存在'}, 404)
+
+    # --- 权限校验（H1-②）---
+    is_admin = user['role'] == 'admin'
+    is_creator = task['created_by'] == user['user_id']
+    if not (is_admin or is_creator):
+        return _mail_result(
+            task_id, {'success': False, 'message': '仅管理员或任务创建人可发送提醒邮件'}, 403)
+
+    if not models.is_mail_configured():
+        return _mail_result(task_id, {
+            'success': False,
+            'message': '邮件功能未启用或未完成配置，请联系管理员在「邮件」页配置',
+        }, 400)
+
+    params = request.get_json(silent=True) if request.is_json else {}
+    note = (params or {}).get('note', '') or request.form.get('note', '') or ''
+
+    queue_id, err = mail_dispatcher.enqueue_manual(
+        task_id,
+        operator_id=user['user_id'],
+        note=note,
+        operator_email=(user['email'] or None) if 'email' in user.keys() else None,
+    )
+    if err:
+        return _mail_result(task_id, {'success': False, 'message': err}, 400)
+
+    # 入队成功 → 立刻尝试同步发送这一条（不等待 5 分钟扫描周期）
+    result = mail_dispatcher.send_one(queue_id)
+
+    assignee = models.get_user(task['assignee'])
+    who = assignee['display_name'] if assignee else '负责人'
+
+    if result['success']:
+        return _mail_result(task_id, {
+            'success': True,
+            'message': f'提醒邮件已发送给 {who}',
+        }, 200)
+
+    return _mail_result(task_id, {
+        'success': False,
+        'message': '邮件已加入发送队列，但本次发送未成功，系统将在稍后自动重试。'
+                   f'原因：{result.get("error_message") or "未知错误"}',
+    }, 202)
+
+
+def _mail_result(task_id, payload, status):
+    """手动发送邮件的响应适配：AJAX 回 JSON，整页提交回 flash + 重定向。
+
+    202（已入队待重试）在整页场景下按失败提示处理——对操作人来说
+    「没发出去」才是此刻需要知道的信息，重试细节属于后台行为。
+    """
+    if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify(payload), status
+
+    flash(payload['message'], 'success' if payload['success'] else 'error')
+    return redirect(request.referrer or url_for('task.task_detail', task_id=task_id))

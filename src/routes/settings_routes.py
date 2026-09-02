@@ -3,6 +3,7 @@
 包含：
 - GET  /settings/profile   个人设置页
 - POST /settings/profile   修改显示名/密码
+- POST /settings/mail      修改个人邮箱与邮件订阅等级（V4）
 - GET  /settings/system    系统设置页（管理员，预警天数配置）
 - POST /settings/system    保存系统设置
 """
@@ -12,6 +13,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 import config
 import models
 import auth
+import mail_constants
 from auth import login_required, admin_required, get_current_user
 
 settings_bp = Blueprint('settings', __name__)
@@ -57,7 +59,12 @@ def profile():
         if errors:
             for err in errors:
                 flash(err, 'error')
-            return render_template('settings/profile.html', current_user=user)
+            return render_template(
+                'settings/profile.html',
+                current_user=user,
+                notify_levels=mail_constants.NOTIFY_LEVELS,
+                notify_level_labels=mail_constants.NOTIFY_LEVEL_LABELS,
+            )
 
         # --- 执行更新 ---
         if display_name != user['display_name']:
@@ -72,7 +79,46 @@ def profile():
         flash('设置已保存', 'success')
         return redirect(url_for('settings.profile'))
 
-    return render_template('settings/profile.html', current_user=user)
+    return render_template(
+        'settings/profile.html',
+        current_user=user,
+        notify_levels=mail_constants.NOTIFY_LEVELS,
+        notify_level_labels=mail_constants.NOTIFY_LEVEL_LABELS,
+    )
+
+
+@settings_bp.route('/settings/mail', methods=['POST'])
+@login_required
+def mail_preference():
+    """修改个人邮箱与邮件订阅等级（V4，H3-① 邮箱仅本人与管理员可见）。
+
+    单独开一个路由而不是并进 profile 表单，是因为两者语义不同：
+    profile 表单改的是账号本身（显示名/密码），这里改的只是通知偏好，
+    混在一起会让「改个邮箱也要输原密码」这种体验问题变得很难解。
+    """
+    user = get_current_user()
+
+    email = (request.form.get('email') or '').strip()
+    level = (request.form.get('mail_notify_level') or '').strip()
+
+    if email and '@' not in email:
+        flash('邮箱地址格式不正确（需包含 @）', 'error')
+        return redirect(url_for('settings.profile'))
+
+    if level and level not in mail_constants.NOTIFY_LEVELS:
+        flash('订阅等级不合法', 'error')
+        return redirect(url_for('settings.profile'))
+
+    # 邮箱：空串写入 NULL，与 get_mail_recipient 的判空逻辑保持一致
+    stored_email = models.get_user(user['user_id'])['email']
+    if email != (stored_email or ''):
+        models.update_user_email(user['user_id'], email)
+
+    if level:
+        models.update_mail_notify_level(user['user_id'], level)
+
+    flash('邮件通知设置已保存', 'success')
+    return redirect(url_for('settings.profile'))
 
 
 @settings_bp.route('/settings/system', methods=['GET', 'POST'])

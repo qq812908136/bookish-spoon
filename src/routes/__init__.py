@@ -17,6 +17,7 @@ def register_blueprints(app: Flask):
     - user:      用户管理（管理员）
     - settings:  个人设置、系统设置
     - dashboard: 仪表盘概览
+    - mail:      邮件通知（状态页、配置、测试、重发）
     """
     # 延迟导入避免循环依赖
     from routes.auth_routes import auth_bp
@@ -26,6 +27,7 @@ def register_blueprints(app: Flask):
     from routes.user_routes import user_bp
     from routes.settings_routes import settings_bp
     from routes.dashboard_routes import dashboard_bp
+    from routes.mail_routes import mail_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(task_bp)
@@ -34,3 +36,4 @@ def register_blueprints(app: Flask):
     app.register_blueprint(user_bp)
     app.register_blueprint(settings_bp)
     app.register_blueprint(dashboard_bp)
+    app.register_blueprint(mail_bp)
