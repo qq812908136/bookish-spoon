@@ -3545,6 +3545,85 @@ class TestManualMailSend(unittest.TestCase):
         self.assertIn('disabled', html)
 
 
+class TestStaticAssetVersion(unittest.TestCase):
+    """静态资源缓存串（cache-busting）：防「改了样式忘了升版本号」回归。
+
+    背景（2026-09-03 真实事故）：模板里 url_for('static', ..., v='YYYYMMDDx')
+    的版本号原本写死在每个模板中。某次改 CSS 只 bump 了 base.html，而
+    login.html / setup.html 是独立页面（不继承 base.html），版本号没跟着变，
+    结果登录页与初始化向导页仍向浏览器请求旧版本 → 命中缓存 → 拿到旧样式，
+    打包成 exe 后尤其难查（只能靠实跑冒烟发现）。
+
+    现在版本号集中在 config.STATIC_VERSION，由 inject_globals() 注入。
+    下面两个用例分别守住「结构」（不许再硬编码）与「行为」
+    （每个页面真的拿到同一个版本号）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app()
+        cls.app.config['TESTING'] = True
+
+    def setUp(self):
+        reset_database()
+        self.client = make_client(self.app)
+
+    def _asset_versions(self, html):
+        """取出页面里所有静态资源的缓存串（去重排序）。"""
+        return sorted(set(re.findall(r'/static/[^\s"\']+\?v=([^"\'\s>]+)', html)))
+
+    def test_no_hardcoded_version_in_templates(self):
+        """模板里不许出现 v='YYYYMMDD' 字面量，一律写 v=static_version。
+
+        谁把版本号写回某个模板，这个用例就失败——那意味着下次改样式时
+        又会漏掉这个页面（login.html / setup.html 不继承 base.html，最易漏）。
+        """
+        offenders = []
+        pattern = re.compile(r"url_for\(\s*'static'[^)]*v\s*=\s*'[^']*'")
+        for dirpath, _dirnames, filenames in os.walk(config.TEMPLATE_DIR):
+            for name in filenames:
+                if not name.endswith('.html'):
+                    continue
+                path = os.path.join(dirpath, name)
+                with open(path, encoding='utf-8') as f:
+                    for lineno, line in enumerate(f, 1):
+                        if pattern.search(line):
+                            rel = os.path.relpath(path, config.TEMPLATE_DIR)
+                            offenders.append('%s:%d' % (rel, lineno))
+        self.assertEqual([], offenders,
+                         '静态资源版本号必须写成 v=static_version（由 config.STATIC_VERSION '
+                         '统一提供），以下位置仍在硬编码：%s' % '、'.join(offenders))
+
+    def test_every_page_uses_the_same_version(self):
+        """登录页 / 初始化向导页 / 已登录页面必须拿到同一个版本号。
+
+        不打真实页面就测不出来——模板源码看着对，渲染时上下文没注入变量
+        同样会渲染成空串。
+        """
+        expected = config.STATIC_VERSION
+        self.assertTrue(expected, 'config.STATIC_VERSION 不能为空')
+
+        # 初始化向导页：必须在建号之前取——库里一旦有管理员，
+        # /setup 就会跳回登录页，同样 /login 也会跳去 /setup，
+        # 拿到的都是 302 跳转存根而不是真正的页面。
+        setup_html = self.client.get('/setup').data.decode('utf-8')
+        self.assertEqual([expected], self._asset_versions(setup_html),
+                         '初始化向导页未使用统一版本号')
+
+        create_test_user('admin', '管理员', password='admin123456', role='admin')
+
+        # 登录页
+        login_html = self.client.get('/login').data.decode('utf-8')
+        self.assertEqual([expected], self._asset_versions(login_html),
+                         '登录页未使用统一版本号——改了 CSS 这里会拿到旧样式')
+
+        # 已登录页面（走 base.html）
+        self.client.post('/login', data={'username': 'admin', 'password': 'admin123456'})
+        dash_html = self.client.get('/dashboard').data.decode('utf-8')
+        self.assertEqual([expected], self._asset_versions(dash_html),
+                         '已登录页面未使用统一版本号')
+
+
 # ============================================================
 # 主程序入口
 # ============================================================

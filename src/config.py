@@ -44,6 +44,16 @@ else:
 TEMPLATE_DIR = os.path.join(BUNDLE_DIR, 'templates')
 STATIC_DIR = os.path.join(BUNDLE_DIR, 'static')
 
+# 静态资源缓存串（cache-busting）：改了 CSS/JS 之后改这里即可全局生效。
+#
+# 背景：模板里 url_for('static', ..., v='YYYYMMDDx') 靠这个版本号让浏览器
+# 丢弃旧缓存。以前版本号写死在每个模板里，而 login.html / setup.html 是
+# 独立页面（不继承 base.html），改样式时只 bump 了 base.html，导致登录页
+# 和初始化向导页仍请求旧版本 → 拿到旧 CSS。
+# 现在统一由 app.py 的 inject_globals() 注入 static_version，模板里一律
+# 写 v=static_version，杜绝「改了样式忘了升某个页面」。
+STATIC_VERSION = '20260903a'
+
 # 数据库文件路径（运行时自动创建 data/ 目录）
 # 数据库始终放在 BASE_DIR 下（exe 同级目录），不在临时解压目录
 DATA_DIR = os.path.join(BASE_DIR, 'data')
