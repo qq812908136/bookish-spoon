@@ -1,9 +1,9 @@
 # 督办系统 — 架构设计文档
 
-> **文档状态**：已确认（2026-08-25），交付工程师实施；**V2 迭代增补**（2026-08-28）：数据模型 / 路由表 / 前端交互契约 / 数据库迁移已按 V2 交付代码同步
+> **文档状态**：已确认（2026-08-25），交付工程师实施；**V2 迭代增补**（2026-08-28）：数据模型 / 路由表 / 前端交互契约 / 数据库迁移已按 V2 交付代码同步；**V4 迭代增补**（2026-09-03）：新增第十三章「邮件通知模块」，覆盖数据模型（V3 迁移）/ 配置三级优先级 / 凭据加密 / 队列与熔断 / 挂钩点 / 路由权限，已按 V4 交付代码同步
 > **编写人**：架构师（高见远 / Bob）
 > **日期**：2025-08-25
-> **依据**：PRD-draft-v1.md（已确认）+ iteration-v2-design.md（V2 设计，Q1–Q9 已确认）
+> **依据**：PRD-draft-v1.md（已确认）+ iteration-v2-design.md（V2 设计，Q1–Q9 已确认）+ 督办系统-V4邮件功能需求清单.md（V4 需求，A1–I6 已锁定）
 > **适用对象**：开发工程师、用户（编程新手）
 
 ---
@@ -1399,6 +1399,475 @@ def execute(sql, params=()):
 
 ---
 
+## 十三、邮件通知模块（V4 迭代）
+
+> **适用范围**：V4 迭代新增的「发送邮件」能力。需求溯源见 `docs/督办系统-V4邮件功能需求清单.md`（55 项决策 A1~I6），配置运维见 `docs/督办系统-邮件功能配置指南.md`。
+> **阅读顺序**：改邮件相关代码前看本章；想理解「为什么这么选」看 `docs/督办系统-系统架构设计.md` 第 9 章。
+
+### 13.0 定位：附加通道，不是主通道
+
+邮件是**站内信之外的第二条通道**，两者地位不对等：
+
+- 站内信是主通道，永远可用、无需任何配置；
+- 邮件是附加通道，**未配置即整体静默**——不报错、不告警、不在界面上刷存在感。
+
+这条定位决定了后面所有设计：**邮件链路的任何异常都不能影响站内信与任务流转**。代码中对应的具体做法有两处，改代码时不要破坏：
+
+1. `warning_engine._enqueue_warning_mails()` 整体 `try/except` 吞异常并记日志；
+2. `scheduler._overdue_scan_loop()` 里 `mail_dispatcher.scan_and_send()` 单独 `try/except`，与逾期扫描互不影响。
+
+数据流全景：
+
+```
+业务触发点                        落库队列                   定时扫描              投递
+──────────────────────────────────────────────────────────────────────────────────────
+warning_engine（每日 09:00）   ┐
+scheduler（每 5 分钟逾期扫描）  ├─→  email_queue  ──→  mail_dispatcher   ──→  mail_service
+task_routes（分配 / 改派）      │    （待发队列）      .scan_and_send()        （SMTP）
+task_routes（手动发送按钮）     │                     每 5 分钟一轮               │
+mail_routes（测试邮件，不走队列）┘                                                ↓
+                                                                          email_log（历史）
+```
+
+### 13.1 模块划分与职责边界
+
+| 模块 | 职责 | **不**负责 |
+|------|------|-----------|
+| `mail_constants.py` | 邮件类型、订阅等级、队列状态、熔断状态、降频判定 | 任何 IO |
+| `crypto_util.py` | SMTP 密码的加解密（纯标准库） | 密钥管理、权限 |
+| `models.py` | 配置读写（三级合并）、队列/历史 CRUD、迁移 | 渲染正文、连 SMTP |
+| `mail_templates.py` | 把任务数据渲染成纯文本主题与正文 | 发送、队列 |
+| `mail_service.py` | 连 SMTP 发一封信 + 把异常归类 | 队列、重试、熔断 |
+| `mail_dispatcher.py` | 入队（合并/去重）、扫描发送、重试、熔断 | 正文措辞、SMTP 细节 |
+| `routes/mail_routes.py` | 状态页、配置保存、操作入口、权限校验 | 业务逻辑 |
+
+**为什么 `mail_constants.py` 要单独成文件**（不是风格偏好，是依赖问题）：
+
+`mail_templates` / `mail_service` / `mail_dispatcher` / `models` 都要引用这些常量。若放进 `models`，而 `models` 在「失败邮件一键重发」时要调用 `mail_templates` 重建正文，就会形成 `models → mail_templates → models` 的循环导入。常量层单独抽出来，环就断了。
+
+```
+             mail_constants  ← 被所有人依赖，自己不依赖任何人
+                   ↑
+    ┌──────────────┼──────────────┬─────────────────┐
+  models     mail_templates   mail_service    mail_dispatcher
+    ↑              ↑               ↑                ↑
+    └──────────────┴───────────────┴────────────────┘
+                             ↑
+                   routes/mail_routes.py
+```
+
+### 13.2 数据模型（V3 迁移）
+
+迁移函数：**`models._migrate_v3()`**，由 `init_db()` 末尾调用，与 `_migrate_v2()` 同一套路子——幂等、只加不删、异常不阻断启动。
+
+```
+init_db()
+ ├── 建表（CREATE TABLE IF NOT EXISTS）
+ ├── 建索引 + 写默认配置
+ ├── _migrate_v2()
+ └── _migrate_v3()                       # V4 邮件，幂等
+      ├── ① CREATE TABLE IF NOT EXISTS email_queue / email_log + 5 个索引
+      └── ② users 补 2 列
+             PRAGMA table_info(users) 取现有列名集合
+             逐列检查 email / mail_notify_level
+             （mail_notify_level 带 NOT NULL DEFAULT 'overdue'）
+```
+
+#### 13.2.1 email_queue（待发队列）
+
+```sql
+CREATE TABLE IF NOT EXISTS email_queue (
+    queue_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_id     INTEGER NOT NULL,
+    recipient_email  TEXT    NOT NULL,   -- 发送时快照，事后改邮箱不影响在途邮件
+    task_id          INTEGER,            -- 日报为 NULL
+    mail_type        TEXT    NOT NULL,   -- mail_constants.MAIL_TYPE_*
+    subject          TEXT    NOT NULL,
+    body             TEXT    NOT NULL,   -- 已渲染好的纯文本
+    reply_to         TEXT,               -- B2-③：指向具体操作人
+    operator_id      INTEGER,            -- H6-①：手动发送记操作人，自动发送为 NULL
+    dedup_key        TEXT    NOT NULL,   -- C6-②：邮件独立去重键
+    status           TEXT    NOT NULL DEFAULT 'pending',
+    retry_count      INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at  TEXT    NOT NULL,
+    last_error       TEXT,
+    created_at       TEXT    NOT NULL,
+    sent_at          TEXT,
+    FOREIGN KEY (recipient_id) REFERENCES users(user_id),
+    FOREIGN KEY (task_id)      REFERENCES tasks(task_id) ON DELETE CASCADE,
+    FOREIGN KEY (operator_id)  REFERENCES users(user_id)
+);
+```
+
+**队列只保留两种状态**：`pending` 与 `sending`。发送结束（无论成功还是永久失败）都会立刻从队列删除、转入 `email_log`。这是刻意的——否则队列会无限堆积已完成记录，拖慢每 5 分钟的扫描，也让备份文件越来越大。
+
+#### 13.2.2 email_log（发送历史）
+
+```sql
+CREATE TABLE IF NOT EXISTS email_log (
+    log_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_id     INTEGER,            -- 可为 NULL：用户被删后历史仍保留
+    recipient_email  TEXT    NOT NULL,
+    task_id          INTEGER,
+    mail_type        TEXT    NOT NULL,
+    subject          TEXT    NOT NULL,
+    operator_id      INTEGER,
+    success          INTEGER NOT NULL,   -- 1 成功 / 0 永久失败
+    error_message    TEXT,               -- 已脱敏，绝不含密码
+    attempts         INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT    NOT NULL,   -- 入队时间（清理按此字段算）
+    finished_at      TEXT    NOT NULL,
+    FOREIGN KEY (recipient_id) REFERENCES users(user_id)
+);
+```
+
+`email_log` **不存正文**（只有 subject）。正文可能很长且含任务细节，历史表的主要用途是「核对有没有发、为什么失败」，留主题足够；既省空间，也减少敏感内容在库里的留存面。
+
+#### 13.2.3 users 补两列
+
+| 列 | 类型 | 默认 | 说明 |
+|----|------|------|------|
+| `email` | TEXT | NULL | 选填。未填则**降级为只走站内信**，不报错（D4-②） |
+| `mail_notify_level` | TEXT NOT NULL | `'overdue'` | 订阅等级，见 13.5 |
+
+#### 13.2.4 索引与去重键
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_email_queue_dedup    ON email_queue(dedup_key);
+CREATE       INDEX IF NOT EXISTS idx_email_queue_status    ON email_queue(status, next_attempt_at);
+CREATE       INDEX IF NOT EXISTS idx_email_queue_recipient ON email_queue(recipient_id, created_at);
+CREATE       INDEX IF NOT EXISTS idx_email_log_created     ON email_log(created_at);
+CREATE       INDEX IF NOT EXISTS idx_email_log_recipient   ON email_log(recipient_id, created_at);
+```
+
+`dedup_key` 上的 **UNIQUE 索引是去重的最终防线**：`enqueue_email()` 捕获 INSERT 的约束冲突后直接返回 `None`，业务层拿不到 queue_id 就算入队失败。所以用不用 `has_dedup_key()` 预检都不会重复入队——预检只是为了省掉渲染正文的开销。
+
+**去重键（C6-②：邮件独立一套，不与站内信共用）**
+
+| 邮件类型 | 去重键格式 | 为什么是这个粒度 |
+|---------|-----------|----------------|
+| 逾期提醒 | `overdue:<负责人ID>:<日期>` | **只到人不到任务**——合并后每人每天一封，用任务维度去重反而会让第二个任务入不了队 |
+| 即将到期 | `due_soon:<任务ID>:<负责人>:<日期>` | 不合并，按任务去重 |
+| 长期待激活 | `inactive:<任务ID>:<负责人>:<日期>` | 同上 |
+| 分配/改派 | `assign:<任务ID>:<负责人>:<日期>` | 同一任务当天重复改派只通知一次 |
+| 管理员日报 | `daily_report:<管理员ID>:<日期>` | 每人每天一份 |
+| 手动发送 | `manual:<任务ID>:<操作人>:<YYYYMMDDHHMMSS>` | **含时间戳，故意不去重**，只靠 5 分钟冷却限流（F4-②） |
+
+#### 13.2.5 队列状态流转
+
+```
+                          enqueue_email()
+                                │
+                                ↓
+                       ┌─────────────────┐
+                       │     pending     │◄───────────┐
+                       └─────────────────┘            │
+                                │                     │
+             scan_and_send 取到（next_attempt_at 已到）  │
+                                ↓                     │
+                       ┌─────────────────┐            │
+                       │     sending     │            │
+                       └─────────────────┘            │
+                            │         │               │
+                       成功  │         │ 失败           │
+                            ↓         ↓               │
+                 mark_email_sent()  mark_email_failed() │
+                            │         │               │
+                            │         ├─ 还有重试次数 → 排期 ─┘
+                            │         └─ 次数耗尽 / 永久错误 → 归档
+                            ↓                         ↓
+                   ┌───────────────────────────────────┐
+                   │            email_log              │
+                   │      （success=1 或 success=0）     │
+                   └───────────────────────────────────┘
+                                     │
+                           管理员在状态页点「重发」
+                                     ↓
+                       requeue_failed_email() → 回到 pending
+```
+
+**G5-① 重启时的 sending 重置**：每轮扫描开头调 `models.reset_stuck_emails()`，把所有 `sending` 改回 `pending`。取舍是**宁可重复、不可丢失**——程序被强杀时记录会卡在 sending，重复的代价只是收件人多收一封提醒，丢失的代价是管理员以为通知到位了而实际没有。
+
+### 13.3 配置项（三级优先级）
+
+取值优先级：**系统环境变量 / `.env`  >  数据库（设置页填写，密码加密）  >  `config.py` 默认值**
+
+合并逻辑在 `models.get_mail_config()`，映射表是 `models.MAIL_SETTING_SCHEMA`（`键名 → 环境变量名 → config 属性 → 类型` 四元组）。
+
+⚠️ **铁律：所有默认值必须让「不配置 = 行为不变」成立。**
+`MAIL_ENABLED` 默认 `False` 且 `MAIL_SMTP_HOST` 默认为空，因此 exe 分发到目标机器时，即使没有 `.env`、设置页也没填过，邮件功能完全不激活，行为与 V3 完全一致。已发行的离线程序不会因为升级而突然开始往外发信。
+
+| 配置键 | 环境变量 | 默认值 | 说明 |
+|--------|---------|-------|------|
+| `enabled` | `MAIL_ENABLED` | `False` | 总开关。关闭时队列不扫描、页面不显示入口 |
+| `smtp_host` | `MAIL_SMTP_HOST` | `''` | 为空即视为未配置 |
+| `smtp_port` | `MAIL_SMTP_PORT` | `465` | 465 走 SSL，587 走 STARTTLS |
+| `smtp_username` | `MAIL_SMTP_USERNAME` | `''` | 通常是完整邮箱地址 |
+| `use_ssl` | `MAIL_USE_SSL` | `True` | 与 `use_tls` 二选一，都填 True 时 SSL 优先 |
+| `use_tls` | `MAIL_USE_TLS` | `False` | STARTTLS |
+| `from_addr` | `MAIL_FROM_ADDR` | `''` | 全员共用同一个发件箱（B2-③） |
+| `from_name` | `MAIL_FROM_NAME` | `'督办系统'` | 发件人显示名 |
+| `footer` | `MAIL_FOOTER` | `'本邮件由督办系统自动发送，请勿直接回复。'` | 落款，各单位可改 |
+| `batch_limit` | `MAIL_BATCH_LIMIT` | `20` | 每轮最多发几封（F3-② 防风控） |
+| `retry_max` | `MAIL_RETRY_MAX` | `3` | 首次失败后再重试几次 |
+| `manual_cooldown` | `MAIL_MANUAL_COOLDOWN` | `300` | 手动发送冷却秒数（F4-②） |
+| `mask_title` | `MAIL_MASK_TITLE` | `False` | 标题脱敏（H5-②） |
+| `smtp_password` | `MAIL_SMTP_PASSWORD` | — | **见下方特殊说明** |
+| —（只读运维项） | `MAIL_RETRY_BACKOFF` | `'5,15,30'` | 重试间隔（分钟），不入库 |
+| —（只读运维项） | `MAIL_LOG_RETENTION_DAYS` | `90` | 发送记录保留天数（I2-②） |
+| —（只读运维项） | `MAIL_CIRCUIT_FAIL_THRESHOLD` | `10` | 连续失败多少次触发熔断（G4-②） |
+| —（只读运维项） | `MAIL_CIRCUIT_PAUSE_MINUTES` | `60` | 通用熔断暂停时长（分钟） |
+
+**密码的两条特殊规则**：
+
+1. `smtp_password` **不在 `config.py` 里读取**。它只有两个来源：环境变量/`.env`（明文）、数据库（加密）。放进 config 会被模块级常量固化，既挡不住设置页覆盖，又多一个泄露面。
+2. 页面保存时**留空表示不修改**（`save_password=False` 时保留库中原有密文），避免管理员只想改端口却被清空了授权码。
+
+**环境变量锁定标注**：`routes/mail_routes._env_locked_keys()` 会算出被 env 占住的键，模板上打「由 .env 锁定，页面修改不生效」的标记。因为优先级是 env > db，否则管理员会遇到「明明保存成功却没变化」的假故障。
+
+### 13.4 SMTP 凭据加密（crypto_util.py）
+
+算法：**PBKDF2-HMAC-SHA256 派生主密钥 + SHAKE256 生成密钥流做 XOR 流密码**。
+
+```
+data/secret.key（首次启动生成，权限 600）
+        │  pbkdf2_hmac('sha256', secret, b'supervision-mail-credential-v1', 200000, 32)
+        ↓
+   32 字节主密钥
+        │  密文 = base64( nonce(12B) || (MAGIC + plaintext) XOR shake256(master+nonce) )
+        ↓
+   存进 app_config 表的 mail_smtp_password
+```
+
+**安全边界（必须如实告知使用者，不要夸大）**：
+
+| 项 | 事实 |
+|----|------|
+| 算法强度 | 不是工业标准（非 AES-GCM），足以挡住「用文本编辑器打开数据库瞄一眼」，**过等保/正式审计仍需换 cryptography 的 AES** |
+| 密钥依赖 | 完全依赖 `data/secret.key`。该文件丢失或被替换，已存密文就解不开 |
+| 失败行为 | `decrypt()` 返回 `None` 而不是抛异常——上层据此提示「请重新填写密码」，整个请求不会 500 |
+| 完整性 | 无 MAC，篡改密文得到乱码而非明确报错。本地 SQLite 同机读写场景下不构成实际威胁 |
+
+`is_available()` 供设置页提前判断加密能力是否可用，不可用就不让填密码，避免「填完了才发现存不进去」。
+
+### 13.5 邮件类型与订阅等级
+
+**7 种邮件类型**（`mail_constants.MAIL_TYPE_*`）：
+
+| 常量 | 值 | 触发时机 | 收件人 |
+|------|-----|---------|--------|
+| `MAIL_TYPE_OVERDUE` | `overdue` | 每日 09:00 扫描 / 任务刚被标记逾期 | 负责人（按人合并） |
+| `MAIL_TYPE_DUE_SOON` | `due_soon` | 每日 09:00 扫描 | 负责人（需订阅等级 ≥ overdue_due） |
+| `MAIL_TYPE_INACTIVE` | `inactive` | 每日 09:00 扫描 | 负责人（需订阅等级 = all） |
+| `MAIL_TYPE_ASSIGN` | `assign` | 新建分配 / 改派 | 新负责人 |
+| `MAIL_TYPE_DAILY_REPORT` | `daily_report` | 每日 09:00（在三类预警之后） | 全体管理员 |
+| `MAIL_TYPE_MANUAL` | `manual` | 任务详情页「发送提醒」按钮 | 负责人 |
+| `MAIL_TYPE_TEST` | `test` | 设置页「发送测试邮件」 | 指定用户 |
+
+**4 级订阅**（`users.mail_notify_level`，默认 `overdue`）：
+
+| 等级 | 值 | 接收的邮件类型 |
+|------|-----|--------------|
+| 关闭 | `off` | 无（仍收站内信） |
+| 仅逾期（默认） | `overdue` | 逾期提醒、分配通知 |
+| 逾期 + 即将到期 | `overdue_due` | 上述 + 即将到期 |
+| 全部预警 | `all` | 上述 + 长期待激活 |
+
+判定统一走 `models.user_wants_mail(user, mail_type)`，内部查 `LEVEL_ALLOWED_TYPES`。
+
+> **管理员日报是唯一例外**：不受三级预警类型限制，只要订阅等级不是 `off` 就照发（D2-②）。原因是日报是管理员的全局视图，不是「某个任务的预警」。
+
+### 13.6 入队：六个入口
+
+全部集中在 `mail_dispatcher.py`，函数命名统一 `enqueue_*`。
+
+| 入口函数 | 调用方 | 去重键粒度 | 特殊规则 |
+|---------|-------|-----------|---------|
+| `enqueue_overdue_warnings()` | `warning_engine`（全量）/ 任务刚逾期（传 `task`） | 人 + 日期 | **按负责人合并**（F2-②）+ 降频（F1-②） |
+| `enqueue_due_soon_warnings()` | `warning_engine` | 任务 + 人 + 日期 | 需订阅等级 ≥ overdue_due |
+| `enqueue_inactive_warnings()` | `warning_engine` | 任务 + 人 + 日期 | 需订阅等级 = all |
+| `enqueue_assignment()` | `task_routes`（新建/改派） | 任务 + 人 + 日期 | 分配给自己不发 |
+| `enqueue_daily_reports()` | `warning_engine`（最后调用） | 人 + 日期 | 只按 `role_filter='admin'` 群发 |
+| `enqueue_manual()` | `task_routes`（手动按钮） | 含时间戳 | 5 分钟冷却（F4-②），入队后立刻同步发一次 |
+
+**F2-② 按人合并是在入队阶段完成的，不是发送阶段。** 每人每天只生成**一条**队列记录，正文里列出他名下的全部逾期任务。这样队列记录与物理邮件一一对应，重试/限流/去重都变得直白；如果在发送阶段再聚合，失败重试时就得处理「一批里部分成功」的复杂状态。
+
+实测效果：50 个任务 × 10 个人，逐任务发是 500 封/天，按人合并加管理员日报后约 30 封/天。
+
+**F1-② 逾期降频**（`mail_constants.should_remind_overdue`）：逾期第 1/2/3 天每天提醒，之后每 3 天一次 → 序列 `1,2,3,6,9,12,15…`。判定用的是「名下**任何一项**任务今天该提醒就发这封合并邮件」，对他来说一次看完全部逾期项才是有用的信息。
+
+> **已确认口径一（2026-09-03 用户拍板）**：管理员本人是某个任务的负责人时，逾期提醒**照发**。
+> 依据：`enqueue_overdue_warnings()` 纯按 `models.get_overdue_tasks_by_assignee()` 的负责人维度遍历，管理员身份没有任何额外加成或豁免。
+> 未采用的备选：管理员作为负责人时跳过。理由：管理员也要为自己名下的任务负责，跳过会造成「我自己的任务反而没提醒」的盲区。
+
+### 13.7 发送：scan_and_send 流程
+
+由 `scheduler._overdue_scan_loop()` 每 5 分钟调用一次，**不新增线程**（C4-②）。
+
+```python
+def scan_and_send(cfg=None):
+    # 1. 未配置 / 未启用 → 静默返回（B5-①）
+    if not models.is_mail_configured(cfg):
+        return {'sent': 0, 'failed': 0, 'skipped': 'not_configured'}
+
+    # 2. 熔断检查（含自动试探恢复）
+    allowed, state = _circuit_allows_sending(cfg)
+    if not allowed:
+        return {'sent': 0, 'failed': 0, 'skipped': 'circuit_open'}
+
+    # 3. 重置卡在 sending 的记录（G5-①）
+    models.reset_stuck_emails()
+
+    # 4. 取本轮待发（F3-② batch_limit 限流）
+    rows = models.fetch_due_emails(batch_limit)
+
+    # 5. 逐封发送；每封前重新检查熔断
+    for row in rows:
+        allowed, _ = _circuit_allows_sending(cfg)
+        if not allowed:
+            break                      # 上一封触发了认证失败，本轮停下
+        send_one(row['queue_id'], cfg)
+
+    # 6. 每日一次清理过期日志（I2-②）
+    _maybe_cleanup_logs(cfg)
+```
+
+**第 5 步「每封都重新检查熔断」不是冗余**：认证失败会在处理第一封时就触发熔断，若不逐封检查，本轮剩下的十几封会全部白试一遍——而认证失败重试正是最容易被服务商封号的动作。
+
+`_maybe_cleanup_logs()` 用模块级 `_last_cleanup_date` 变量控制「每天只跑一次」，避免每 5 分钟执行一次 `DELETE`。
+
+**测试邮件是唯一不走队列的发送路径**（`mail_dispatcher.send_test_mail()`）。有意为之：测试邮件的全部意义就是「立刻知道配置对不对」，若也排队等 5 分钟，排查周期被无谓拉长。它仍会写一条 `email_log`，便于在记录列表里核对。
+
+### 13.8 重试与退避
+
+| 规则 | 实现 |
+|------|------|
+| 次数 | `retry_max=3` 表示**首次失败后再重试 3 次**，总共尝试 4 次 |
+| 判定 | `retry_count > retry_max` 才归档。`retry_count` 是「已重试次数」，不含首次 |
+| 间隔 | `MAIL_RETRY_BACKOFF='5,15,30'` 分钟，递增；列表比 `retry_max` 短时用最后一项兜底 |
+| 排期 | `mark_email_failed()` 更新 `next_attempt_at`，记录留在队列里等下一轮 |
+| 计数 | 注意是 `>` 不是 `>=`（写成 `>=` 会少重试一次，与配置项字面意思不符） |
+
+发送结果由 `mail_service._classify()` 归类，分五类处理：
+
+| 错误类型 | 触发 | 处理 |
+|---------|------|------|
+| `auth` | 535 认证失败、530 需认证、发件人被拒 | **永久失败 + 立即熔断**（G3-③） |
+| `spam` | 552 超配额 / 554 事务失败 | **永久失败 + 立即熔断** |
+| `rejected` | 550 / 553 收件人不存在 | 永久失败，**不熔断**（只是这一个地址有问题） |
+| `throttled` | 452 / 454 超出发信限额 | 正常排队重试（退避已覆盖） |
+| `transient` | 超时、断连、DNS 失败、其它 5xx | 正常排队重试 |
+
+### 13.9 双重熔断
+
+存在**两套独立的熔断机制**，触发条件与恢复方式都不同：
+
+```
+      ┌────────────────────────────────────┐
+      │  认证失败 / 判定垃圾邮件（auth、spam）  │
+      └─────────────────┬──────────────────┘
+                        │ 立即熔断，无 resume_at
+                        ↓
+               需管理员人工点「恢复发送」
+               （POST /mail/circuit/resume）
+
+
+      ┌────────────────────────────────────┐
+      │  连续失败 N 封（transient/throttled）  │
+      └─────────────────┬──────────────────┘
+                        │ streak >= threshold(10)
+                        ↓
+               暂停 60 分钟，到点自动试探
+               （半开：先放行一封，失败再次熔断）
+```
+
+熔断状态存在 `app_config` 表（键前缀 `mail_circuit_`），读写走 `models.get_circuit_state()` / `set_circuit_state()`。
+
+**为什么认证失败要立即熔断且必须人工恢复**：密码错了还一直试，一天就是几千次失败登录，很可能把发件邮箱账号直接封掉。这个代价比「暂停发信」大得多，所以宁可麻烦管理员点一下。
+
+> **已确认口径二（2026-09-03 用户拍板）**：在设置页保存配置，**不自动解除熔断**。
+> 依据：`mail_routes.save_config()` 成功后只调 `models.reset_fail_streak()`（清零连续失败计数），**不碰** `set_circuit_state()`。恢复熔断只有 `POST /mail/circuit/resume` 这一条路径。
+> 未采用的备选：保存即自动恢复。理由：管理员可能只是改了端口或落款，SMTP 账号密码其实还是错的，自动恢复会立刻再撞一次认证失败。把「确认配置已修正」做成一个显式动作更稳。
+
+### 13.10 调度挂钩点
+
+**只挂三处，绝不改 `models.create_message()`**（站内信主通道保持零侵入）：
+
+| 挂钩点 | 位置 | 做什么 |
+|-------|------|-------|
+| 队列扫描 | `scheduler.py:65`，在 `_overdue_scan_loop` 内 | 复用既有 5 分钟循环，与逾期扫描并列、独立 try/except |
+| 预警入队 | `warning_engine.py:84` `_enqueue_warning_mails()` | 在**全部任务扫描循环之后**调用（见下方说明） |
+| 任务即时通知 | `warning_engine.py:182`（刚逾期）、`task_routes.py:976`（分配）、`task_routes.py:1228`（手动） | 单个任务的即时入队 |
+
+**`_enqueue_warning_mails()` 的位置刻意在循环之后**，这是 F2-② 合并策略的必然要求：邮件是按人合并的，必须等全部任务扫描完、拿到每人完整的逾期清单，才能生成合并邮件。若在循环内逐任务入队，同一负责人会被去重键挡住，导致清单不完整。
+
+四个 `enqueue_*` 的调用顺序也有讲究：`enqueue_daily_reports()` 放最后，此时当天的逾期邮件已全部入队，日报统计到的是最完整的数据。
+
+### 13.11 路由与权限
+
+全部在 `routes/mail_routes.py`，蓝图 `mail_bp`，前缀 `/mail`：
+
+| 方法 | 路径 | 权限 | 用途 |
+|------|------|------|------|
+| GET | `/mail` | `admin_required` | 状态页（概览 + 配置 + 记录 + 失败清单 + 未填邮箱名单） |
+| POST | `/mail/config` | `admin_required` | 保存配置 |
+| POST | `/mail/test` | `admin_required` | 发送测试邮件 |
+| POST | `/mail/scan` | `admin_required` | 立即扫描队列（不等 5 分钟） |
+| POST | `/mail/circuit/resume` | `admin_required` | 手动恢复熔断 |
+| POST | `/mail/log/<id>/requeue` | `admin_required` | 失败邮件一键重发 |
+| POST | `/mail/users/<id>/email` | `admin_required` | 管理员代填用户邮箱 |
+| GET | `/mail/my` | `login_required` | 「发给我的」邮件记录（普通用户） |
+
+状态页的设计意图：**管理员排障的主入口**。所有异常（未配置 / 已熔断 / 有失败件 / 有人没填邮箱）在这里一次看完，不需要翻日志。
+
+模板：`templates/mail/status.html`（管理员）、`templates/mail/my.html`（个人）。
+
+**复选框的坑（改这个页面时务必注意）**：浏览器未勾选的复选框**根本不会提交该键**，所以服务端必须用 `'enabled' in form` 判断，不能用 `form.get('enabled')`——后者会让「取消勾选」因为键缺失而保存不进去，值停留在旧的 1。`save_config()` 里四个布尔键都是显式组装的。写测试模拟未勾选时，要把键从 dict 里 `del` 掉，传空字符串测不出来。
+
+### 13.12 隐私与安全（P-7）
+
+三条硬约束，改代码时逐条复核：
+
+1. **SMTP 密码任何情况下不写日志、不回显页面**。
+   `mail_service._sanitize()` 会在返回前把密码从错误文本里抹掉。smtplib 的异常理论上不含密码，但这条防线必须显式存在。
+2. **日志只记元数据，不记正文**。
+   成功日志形如 `邮件已发送：queue_id=12 → user@example.com`；失败日志记类型与脱敏后的原因，不记 subject/body。
+3. **脱敏后的错误文本才入库**。
+   `_sanitize(raw, secrets)[:500]` 之后才写 `email_log.error_message` 与队列的 `last_error`。
+
+此外：
+
+- 收件地址在入队时**快照**到 `recipient_email`，事后改邮箱不影响在途邮件，也让历史记录保持真实。
+- `MAIL_MASK_TITLE=True` 时正文不显示完整任务标题，只显示「任务 #123」（H5-②）。
+- 邮件正文是纯文本 UTF-8（N-4），不带 HTML，避免把任务内容渲染成可点击链接。
+- 邮件头带 `Auto-Submitted: auto-generated`，抑制自动回复，减少无效回信。
+
+### 13.13 静默降级清单（B5-①）
+
+以下情形**一律静默跳过，不报错、不告警、不在界面刷存在感**：
+
+| 情形 | 代码位置 |
+|------|---------|
+| 功能未启用 / SMTP 未配置 | 每个 `enqueue_*` 开头的 `is_mail_configured()` 检查 |
+| 负责人未填邮箱 / 账号已停用 | `models.get_mail_recipient()` 返回 None |
+| 订阅等级不含该邮件类型 | `models.user_wants_mail()` |
+| 今天已排过（去重键命中） | `models.has_dedup_key()` |
+| 不在降频序列内（逾期提醒） | `mail_constants.should_remind_overdue()` |
+| 熔断未恢复 | `_circuit_allows_sending()` |
+
+### 13.14 排障路径
+
+| 现象 | 先看哪里 |
+|------|---------|
+| 完全没收到邮件 | `/mail` 状态页「未配置原因」→ 收件人邮箱是否填 → 订阅等级 → 是否在降频序列 |
+| 昨天正常今天不发 | 状态页熔断横幅（认证失败会显示具体原因）→ 修正后点「恢复发送」 |
+| 队列一直有积压 | 点「立即扫描」看本轮成功/失败数；失败数不为 0 看失败清单的 `error_message` |
+| 某一封失败想重发 | 失败清单 → 「重发」（`requeue_failed_email()` 会用 `_rebuild_body_for_retry()` 重建正文） |
+| 页面保存了但没生效 | 看配置表单上「由 .env 锁定」的标记（`_env_locked_keys()`） |
+| 需要看细节 | `logs/supervision.log`，搜索 `邮件` 关键字 |
+
+---
+
 ## 附录：架构关键决策速查
 
 | 决策点 | 选择 | 一句话理由 |
@@ -1414,6 +1883,10 @@ def execute(sql, params=()):
 | V2 抽屉交互 | 整页渲染 + 片段注入混合模式 | 保留多页架构，零框架实现模板交互 |
 | V2 数据库升级 | init_db 内幂等迁移（models._migrate_v2） | 老库启动自动升级，数据不丢 |
 | V2 深色模式 | CSS 变量双套 + html.dark | 单 CSS 文件实现，零构建成本 |
+| V4 邮件通道 | 落库队列 + 复用既有 5 分钟扫描 | 零新增线程，重启不丢邮件 |
+| V4 邮件合并 | 入队阶段按负责人合并 | 队列记录与物理邮件一一对应 |
+| V4 凭据加密 | 标准库 PBKDF2 + SHAKE256 XOR | 零新增依赖，免重打包 exe |
+| V4 失败保护 | 双重熔断（认证人工恢复 / 连续失败自动试探） | 认证失败重试会被服务商封号 |
 
 ---
 

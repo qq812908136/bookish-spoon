@@ -345,7 +345,7 @@ README = """# 督办系统 — 交付包 {VER}（{DATE} 整理）
 ```
 督办系统-交付包-{VER}/
 ├── 01_需求文档/        需求规格说明书、PRD 草稿、V4 邮件功能需求清单
-├── 02_设计文档/        系统架构、接口、数据库、模块详细设计、V2 迭代设计
+├── 02_设计文档/        系统架构、接口、数据库、模块详细设计、V2 迭代设计（两份架构文档均含 V4 邮件章节）
 ├── 03_开发代码/        Flask 源码（src/）+ 测试（tests/）+ 脚本（scripts/）+ 启动脚本
 ├── 04_测试/           测试用例、测试报告（HTML/Markdown）、缺陷清单、报告生成器
 ├── 05_离线程序/        免环境依赖的 Windows 离线程序（含 督办系统.exe）
@@ -494,6 +494,21 @@ def main():
 
     # 去掉易腐的「-最新」命名（只影响新版本，基线 v3 不在写入路径上）
     apply_renames(dst, RENAME_MAP)
+
+    # 设计文档：与需求文档同理，02 整段来自基线，基线上没有本版本的增量。
+    # 凡是 docs/ 里在本版本**改过**的设计类文档，都要在这里显式补进去。
+    #
+    # 注意这里按**重命名后的目标名**写入，所以必须排在 apply_renames 之后：
+    # 仓库里叫 architecture-design.md（英文短名，被 7 处引用不能改），
+    # 交付包里叫「督办系统-架构设计.md」（中文长名，正式交付名）。
+    DESIGN_DOCS = (
+        ('architecture-design.md', '督办系统-架构设计.md'),
+        ('督办系统-系统架构设计.md', '督办系统-系统架构设计.md'),
+    )
+    for src_name, out_name in DESIGN_DOCS:
+        if copy_file(os.path.join(docs_src, src_name),
+                     os.path.join(dst, '02_设计文档', out_name)):
+            print(f'  [OK]   已同步 02_设计文档/{out_name}')
 
     # 用最新打包产物替换离线 exe（基线里的可能是旧结构源码构建的）
     sync_offline_exe(dst)
