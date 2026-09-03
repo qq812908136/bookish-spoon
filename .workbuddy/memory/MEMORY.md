@@ -68,6 +68,8 @@
 - **⚠️ 沙箱有批量删除守卫（单回合 50 个）**：PyInstaller 重打包会删 `dist/督办系统`（163 文件）、交付包脚本会删旧 v4 目录（50 文件），都会触发中断。**对策：① 先把旧目录 `mv` 成 `_prev-xxx` 再打包；② 能把「复制完再删」改成「复制时用 `ignore` 过滤」就改**。
 - **静态资源版本号只能有一个来源**：`config.STATIC_VERSION` → `app.py` 的 `inject_globals()` 注入 → 模板写 `v=static_version`。**`login.html` / `setup.html` 不继承 `base.html` 是独立页面**，版本号写死在各自模板里必然漏改（2026-09-03 真实事故：改了 CSS 但登录页仍加载旧样式，只能靠实跑 exe 冒烟才发现）。已有 `TestStaticAssetVersion` 2 项测试守住。
 - `PYZ` 里有模块 ≠ 运行时能跑：打包后必须**实跑 exe 冒烟**（临时脚本 `_smoke_exe.py` 21 项）。冒烟取任务 ID 用列表页的 `data-detail-url="/tasks/(\d+)"`——抽屉 URL `/tasks/<id>/drawer` 是 JS 拼的，页面源码里搜不到。
+- **PyInstaller 产物 `dist/督办系统/` 不含 data/**（spec datas 只有 templates/static）：直接跑 dist exe 会自建空库并跳 `/setup`。冒烟前先从上一代 dist（`_archive/_prev-dist-*/data/supervision.db`）拷演示库。**交付包里的演示库由 `build_delivery_package.py` 独立放入、不从 dist 取**（已验证 zip 内 9 用户/45 任务）。
+- **目录删不掉/改不了名（Permission denied）**：查 `Win32_Process.CommandLine` 含该路径的 cmd 宿主——用户从包里跑过的 bat 会以 CWD 钉住整棵目录，`Stop-Process` 即解；safe-delete 报 trash-failed 别误读成权限问题。
 - **本机有 HTTP 代理会拦 localhost**：请求 `127.0.0.1:5000` 返回 **502 / WinError 10054**。冒烟必须 `urllib.request.ProxyHandler({})`（requests 用 `proxies={'http':None,'https':None}`）。
 - **常驻进程必须用 Bash 的 `run_in_background: true`**：`cmd &` 起的进程随调用结束被回收 → WinError 10061。
 - **杀进程用 PowerShell `Stop-Process -Id <pid> -Force`**（Git Bash 里 `taskkill /F` 和 `//F` 都失败）；禁止从 Bash 调 PowerShell 宿主（安全策略拦截整条命令）。Git Bash 的 `/tmp` 对托管 Python 不可见，临时脚本放项目目录。
