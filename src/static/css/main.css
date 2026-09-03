@@ -743,13 +743,15 @@ select.form-control { cursor: pointer; }
    批量操作工具栏
    （2026-09-03 起放在任务列表页头标题右侧：勾选时在标题行内出现，
     不再独占一行把下方表格顶下去。margin-right:auto 让它贴着标题，
-    剩余空间全部留给右侧的「导出/新建」按钮。）
+    剩余空间全部留给右侧的「导出/新建」按钮。
+    上下不留白 + 控件 padding 收到 7px，让工具栏总高 ≈ 按钮高度（34px），
+    出现/消失时页头高度不变，彻底消除残留的 1~2px 抖动。）
    ============================================================ */
 .batch-toolbar {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 6px 14px;
+    padding: 0 12px;
     background-color: var(--color-primary-light);
     border: 1px solid var(--color-primary);
     border-radius: var(--radius-md);
@@ -760,8 +762,8 @@ select.form-control { cursor: pointer; }
 
 .batch-toolbar .batch-count { font-size: var(--font-size-sm); color: var(--color-text-secondary); white-space: nowrap; }
 .batch-toolbar .batch-count strong { color: var(--color-primary); font-weight: 600; }
-.batch-toolbar .form-control { width: auto; min-width: 120px; }
-.batch-toolbar .btn { white-space: nowrap; }
+.batch-toolbar .form-control { width: auto; min-width: 120px; padding-top: 7px; padding-bottom: 7px; }
+.batch-toolbar .btn { white-space: nowrap; padding-top: 7px; padding-bottom: 7px; }
 
 /* ============================================================
    日期输入框：默认以 text 类型显示自定义 placeholder，聚焦时切换为 date 类型

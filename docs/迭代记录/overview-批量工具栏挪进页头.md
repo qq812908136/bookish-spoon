@@ -18,7 +18,8 @@
    **不能**把 `#batch-form` 外扩包住页头——筛选表单会嵌套进批量表单，HTML 不允许，浏览器会拆散结构。
 2. **CSS**（`main.css`）：去掉 `margin-bottom:16px`、padding 收窄为 `6px 14px`、新增 `margin-right:auto`（贴着标题，剩余空间留给右侧按钮）；任务列表页专用规则 `flex-shrink:0` 改为 `flex-shrink:1; min-width:0`（页头也是 flex 容器，窄屏允许收缩换行）。
 3. **JS 零改动**：`updateBatchState()` 等全按 ID 查找，不依赖位置。
-4. **版本号**：`config.STATIC_VERSION` `20260903a` → `20260903b`（集中管理红利，只改一处）。
+4. **版本号**：`config.STATIC_VERSION` `20260903a` → `20260903c`（集中管理红利，只改一处）。
+5. **等高修正（同日晚补）**：初版工具栏带 6px 上下 padding ≈48px，比按钮（34px）高——放进页头后出现时仍会把页头撑高 14px，残留小幅下移。改为上下不留白 + 控件 padding 7px，总高 ≈ 按钮高度，页头高度恒定。
 
 ## 验证
 
