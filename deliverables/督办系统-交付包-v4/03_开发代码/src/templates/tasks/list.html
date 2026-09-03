@@ -5,6 +5,42 @@
 
 <div class="page-header">
     <h1 class="page-title">任务列表</h1>
+
+    {# 批量操作工具栏（默认隐藏，JS 在选中≥1条时显示）。
+       放在页头标题右侧：勾选任务时它在标题行内出现/消失，
+       不再独占一行把下方表格顶下去。
+       控件不在 #batch-form 标签内，靠 form="batch-form" 挂回表单提交。 #}
+    <div class="batch-toolbar" id="batch-toolbar" style="display:none;">
+        <span class="batch-count">已选 <strong id="batch-selected-count">0</strong> 条</span>
+
+        <select name="action" id="batch-action-select" form="batch-form" class="form-control">
+            <option value="">选择操作...</option>
+            <option value="change_status">批量改状态</option>
+            {% if current_user['role'] == 'admin' %}
+            <option value="reassign">批量指派负责人</option>
+            {% endif %}
+        </select>
+
+        {# 批量改状态的目标状态下拉（仅当 action=change_status 时显示） #}
+        <select name="target_status" id="batch-target-status" form="batch-form" class="form-control" disabled style="display:none;">
+            <option value="in_progress">→ 进行中</option>
+            <option value="closed">→ 已闭环</option>
+            <option value="cancelled">→ 已撤销</option>
+        </select>
+
+        {# 批量指派的新负责人下拉（仅当 action=reassign 时显示） #}
+        {% if current_user['role'] == 'admin' %}
+        <select name="new_assignee" id="batch-new-assignee" form="batch-form" class="form-control" disabled style="display:none;">
+            <option value="">选择新负责人...</option>
+            {% for u in active_users %}
+            <option value="{{ u['user_id'] }}">{{ u['display_name'] }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
+
+        <button type="submit" form="batch-form" class="btn btn-primary" id="batch-apply-btn">应用</button>
+    </div>
+
     <div class="page-header-actions">
         {# P1-004：导出 Excel 按钮，携带当前筛选参数 #}
         <a href="{{ url_for('task.task_export', **filters) }}" class="btn btn-secondary">{{ icon('download', 15) }} 导出 Excel</a>
@@ -75,38 +111,6 @@
     <input type="hidden" name="filter_assignee" value="{{ filters.assignee|default('') }}">
     <input type="hidden" name="filter_keyword" value="{{ filters.keyword|default('') }}">
     <input type="hidden" name="filter_sort" value="{{ filters.sort|default('due_date_asc') }}">
-
-    {# 批量操作工具栏（默认隐藏，JS 在选中≥1条时显示） #}
-    <div class="batch-toolbar" id="batch-toolbar" style="display:none;">
-        <span class="batch-count">已选 <strong id="batch-selected-count">0</strong> 条</span>
-
-        <select name="action" id="batch-action-select" class="form-control">
-            <option value="">选择操作...</option>
-            <option value="change_status">批量改状态</option>
-            {% if current_user['role'] == 'admin' %}
-            <option value="reassign">批量指派负责人</option>
-            {% endif %}
-        </select>
-
-        {# 批量改状态的目标状态下拉（仅当 action=change_status 时显示） #}
-        <select name="target_status" id="batch-target-status" class="form-control" disabled style="display:none;">
-            <option value="in_progress">→ 进行中</option>
-            <option value="closed">→ 已闭环</option>
-            <option value="cancelled">→ 已撤销</option>
-        </select>
-
-        {# 批量指派的新负责人下拉（仅当 action=reassign 时显示） #}
-        {% if current_user['role'] == 'admin' %}
-        <select name="new_assignee" id="batch-new-assignee" class="form-control" disabled style="display:none;">
-            <option value="">选择新负责人...</option>
-            {% for u in active_users %}
-            <option value="{{ u['user_id'] }}">{{ u['display_name'] }}</option>
-            {% endfor %}
-        </select>
-        {% endif %}
-
-        <button type="submit" class="btn btn-primary" id="batch-apply-btn">应用</button>
-    </div>
 
     {# ============================================================ #}
     {# 任务表格（含复选框列；V2：点行打开任务详情抽屉 + 新增进度列） #}
