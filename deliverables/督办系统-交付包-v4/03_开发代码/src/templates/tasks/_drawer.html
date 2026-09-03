@@ -11,7 +11,13 @@
    - .resolve-blocker-btn[data-url] 标记阻塞解决
    - .delete-evidence-btn[data-url] 删除证据（V2 批次 4，仅 admin）
    - .delete-blocker-btn[data-url]  删除阻塞（V2 批次 4，仅 admin）
+   - .progress-lg .fill / .pct      进度%行内编辑后由 JS 联动刷新
    权限：can_edit = can_edit_task（admin 全部；owner 仅自己的任务，他人任务只读）
+
+   UI 语言（061）：对齐「督办仓-离线版.html」设计稿——
+   头部小标签 + 状态徽标 + 主操作；内容区「编辑提示条 → 大标题 → 两列信息卡
+   → 整块卡片（进度/长文本/表单/时间线）」的层次。类名与上表契约保持一致，
+   只调整骨架与外观，不动 JS。
    ============================================================ #}
 {% from "macros/icons.html" import icon %}
 
@@ -22,10 +28,29 @@
 {% for u in active_users %}{% set _ = assignee_options.append([u['user_id'], u['display_name']]) %}{% endfor %}
 {% set field_url = url_for('task.task_field', task_id=task['task_id']) %}
 
+{# 头部快捷主操作：优先「已闭环」，其次「进行中」（状态机允许的目标里挑） #}
+{% set quick_closed = allowed_transitions | selectattr('status', 'equalto', 'closed') | list %}
+{% set quick_progress = allowed_transitions | selectattr('status', 'equalto', 'in_progress') | list %}
+{% set quick_t = (quick_closed + quick_progress) | first %}
+
 <div class="drawer-header">
-    <h2 title="{{ task['title'] }}">{{ task['title'] }}</h2>
-    <span class="status-badge st-{{ task['status'] }}">{{ status_labels[task['status']] }}</span>
-    <button class="drawer-close" type="button" title="关闭" aria-label="关闭抽屉">{{ icon('x', 18) }}</button>
+    <div class="drawer-header-main">
+        <span class="drawer-eyebrow">{{ icon('list-checks', 14) }} 任务详情</span>
+        <span class="status-badge st-{{ task['status'] }}">{{ status_labels[task['status']] }}</span>
+    </div>
+    <div class="drawer-header-actions">
+        {% if can_edit and quick_t %}
+        <form class="drawer-form" action="{{ url_for('task.task_change_status', task_id=task['task_id']) }}" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="status" value="{{ quick_t['status'] }}">
+            <button type="submit" class="btn btn-primary btn-sm"
+                    title="直接在头部完成一步流转，需要填写说明请用下方「状态流转」">
+                {{ icon('check-circle', 14) }} {{ quick_t['label'] }}
+            </button>
+        </form>
+        {% endif %}
+        <button class="drawer-close" type="button" title="关闭" aria-label="关闭抽屉">{{ icon('x', 18) }}</button>
+    </div>
 </div>
 
 <div class="drawer-tabs">
@@ -41,101 +66,130 @@
     {# ============================================================ #}
     <div class="drawer-tab-pane active" id="tab-detail">
 
-        {# --- 进度条（行内编辑进度%后由 JS 联动刷新） --- #}
-        <div class="progress-lg">
-            <div class="bar"><div class="fill" style="width: {{ task['progress_percent'] or 0 }}%;"></div></div>
-            <span class="pct">{{ task['progress_percent'] or 0 }}%</span>
-        </div>
+        {# --- 编辑提示条 --- #}
+        {% if can_edit %}
+        <div class="drawer-edit-tip">{{ icon('pencil', 12) }} 带虚框的字段均可点击直接修改，改完自动保存</div>
+        {% else %}
+        <div class="drawer-edit-tip">{{ icon('lock', 12) }} 他人任务仅可查看，如需修改请联系管理员</div>
+        {% endif %}
 
-        {# --- 行内编辑字段组 --- #}
-        <div class="inline-field {{ 'editable' if can_edit }}" data-type="number" data-field="progress_percent" data-url="{{ field_url }}">
-            <div class="field-label">{{ icon('trending-up', 13) }} 进度（%）</div>
-            <div class="field-value" data-raw="{{ task['progress_percent'] or 0 }}">{{ task['progress_percent'] or 0 }}<span class="field-edit-hint">点击编辑</span></div>
-        </div>
-
-        <div class="inline-field {{ 'editable' if can_edit }}" data-type="text" data-field="title" data-url="{{ field_url }}">
-            <div class="field-label">{{ icon('flag', 13) }} 任务标题</div>
+        {# --- 任务标题（大号可编辑） --- #}
+        <div class="inline-field drawer-title-field {{ 'editable' if can_edit }}" data-type="text" data-field="title" data-url="{{ field_url }}">
             <div class="field-value" data-raw="{{ task['title'] }}">{{ task['title'] }}<span class="field-edit-hint">点击编辑</span></div>
         </div>
 
-        <div class="inline-field {{ 'editable' if can_edit }}" data-type="textarea" data-field="description" data-url="{{ field_url }}">
-            <div class="field-label">{{ icon('file-text', 13) }} 工作要求</div>
-            <div class="field-value" data-raw="{{ task['description'] or '' }}" style="white-space:pre-wrap;">{{ task['description'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
-        </div>
+        {# --- 短字段：两列信息卡 --- #}
+        <div class="drawer-field-grid">
 
-        {# 负责人：仅 admin 可行内修改；owner（含自己任务）只读 #}
-        <div class="inline-field {{ 'editable' if can_edit and current_user['role'] == 'admin' }}" data-type="select" data-field="assignee"
-             data-url="{{ field_url }}" data-options="{{ assignee_options|tojson }}">
-            <div class="field-label">{{ icon('user', 13) }} 负责人</div>
-            <div class="field-value" data-raw="{{ task['assignee'] }}">{{ task['assignee_name'] or '未分配' }}<span class="field-edit-hint">点击编辑</span></div>
-        </div>
+            <div class="drawer-info-card">
+                <div class="inline-field {{ 'editable' if can_edit }}" data-type="select" data-field="priority"
+                     data-url="{{ field_url }}" data-options="{{ priority_options|tojson }}">
+                    <div class="field-label">{{ icon('zap', 12) }} 优先级</div>
+                    <div class="field-value" data-raw="{{ task['priority'] }}">{{ priority_labels[task['priority']] }}<span class="field-edit-hint">点击编辑</span></div>
+                </div>
+            </div>
 
-        <div class="inline-field {{ 'editable' if can_edit }}" data-type="select" data-field="priority"
-             data-url="{{ field_url }}" data-options="{{ priority_options|tojson }}">
-            <div class="field-label">{{ icon('zap', 13) }} 优先级</div>
-            <div class="field-value" data-raw="{{ task['priority'] }}">{{ priority_labels[task['priority']] }}<span class="field-edit-hint">点击编辑</span></div>
-        </div>
+            {# 负责人：仅 admin 可行内修改；owner（含自己任务）只读 #}
+            <div class="drawer-info-card">
+                <div class="inline-field {{ 'editable' if can_edit and current_user['role'] == 'admin' }}" data-type="select" data-field="assignee"
+                     data-url="{{ field_url }}" data-options="{{ assignee_options|tojson }}">
+                    <div class="field-label">{{ icon('user', 12) }} 负责人</div>
+                    <div class="field-value" data-raw="{{ task['assignee'] }}">{{ task['assignee_name'] or '未分配' }}<span class="field-edit-hint">点击编辑</span></div>
+                </div>
+            </div>
 
-        <div class="inline-field {{ 'editable' if can_edit }}" data-type="date" data-field="due_date" data-url="{{ field_url }}">
-            <div class="field-label">{{ icon('calendar', 13) }} 截止日期</div>
-            <div class="field-value" data-raw="{{ task['due_date'] }}"
-                 {% if task['status'] == 'overdue' %}style="color:var(--color-red);font-weight:500;"{% endif %}>
-                {{ task['due_date'] }}<span class="field-edit-hint">点击编辑</span>
+            <div class="drawer-info-card">
+                <div class="inline-field {{ 'editable' if can_edit }}" data-type="date" data-field="due_date" data-url="{{ field_url }}">
+                    <div class="field-label">{{ icon('calendar', 12) }} 截止日期</div>
+                    <div class="field-value" data-raw="{{ task['due_date'] }}"
+                         {% if task['status'] == 'overdue' %}style="color:var(--color-red);font-weight:600;"{% endif %}>
+                        {{ task['due_date'] }}<span class="field-edit-hint">点击编辑</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="drawer-info-card">
+                <div class="inline-field {{ 'editable' if can_edit }}" data-type="text" data-field="collaborators" data-url="{{ field_url }}">
+                    <div class="field-label">{{ icon('users', 12) }} 协同方</div>
+                    <div class="field-value" data-raw="{{ task['collaborators'] or '' }}">{{ task['collaborators'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
+                </div>
+            </div>
+
+            {# --- 只读元信息 --- #}
+            <div class="drawer-info-card">
+                <div class="inline-field">
+                    <div class="field-label">{{ icon('user', 12) }} 创建人</div>
+                    <div class="field-value">{{ task['creator_name'] or '—' }}</div>
+                </div>
+            </div>
+
+            <div class="drawer-info-card">
+                <div class="inline-field">
+                    <div class="field-label">{{ icon('clock', 12) }} 创建时间</div>
+                    <div class="field-value">{{ task['created_at']|format_datetime }}</div>
+                </div>
             </div>
         </div>
 
-        <div class="inline-field {{ 'editable' if can_edit }}" data-type="text" data-field="collaborators" data-url="{{ field_url }}">
-            <div class="field-label">{{ icon('users', 13) }} 协同方</div>
-            <div class="field-value" data-raw="{{ task['collaborators'] or '' }}">{{ task['collaborators'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
-        </div>
-
-        <div class="inline-field {{ 'editable' if can_edit }}" data-type="textarea" data-field="risk_note" data-url="{{ field_url }}">
-            <div class="field-label">{{ icon('alert-circle', 13) }} 风险点</div>
-            <div class="field-value" data-raw="{{ task['risk_note'] or '' }}" style="white-space:pre-wrap;">{{ task['risk_note'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
-        </div>
-
-        {# --- 只读元信息 --- #}
-        <div class="detail-grid" style="margin-bottom:16px;">
-            <div class="detail-field">
-                <span class="field-label">创建人</span>
-                <span class="field-value">{{ task['creator_name'] or '—' }}</span>
+        {# --- 进度概览（行内编辑进度%后由 JS 联动刷新进度条） --- #}
+        <div class="drawer-block">
+            <div class="drawer-block-title">{{ icon('trending-up', 12) }} 进度概览</div>
+            <div class="progress-lg">
+                <div class="bar"><div class="fill" style="width: {{ task['progress_percent'] or 0 }}%;"></div></div>
+                <span class="pct">{{ task['progress_percent'] or 0 }}%</span>
             </div>
-            <div class="detail-field">
-                <span class="field-label">创建时间</span>
-                <span class="field-value">{{ task['created_at']|format_datetime }}</span>
+            <div class="inline-field {{ 'editable' if can_edit }}" data-type="number" data-field="progress_percent" data-url="{{ field_url }}">
+                <div class="field-label">完成度（0-100）</div>
+                <div class="field-value" data-raw="{{ task['progress_percent'] or 0 }}">{{ task['progress_percent'] or 0 }}<span class="field-edit-hint">点击编辑</span></div>
+            </div>
+        </div>
+
+        {# --- 工作要求（长文本） --- #}
+        <div class="drawer-block">
+            <div class="drawer-block-title">{{ icon('file-text', 12) }} 工作要求</div>
+            <div class="inline-field {{ 'editable' if can_edit }}" data-type="textarea" data-field="description" data-url="{{ field_url }}">
+                <div class="field-value" data-raw="{{ task['description'] or '' }}">{{ task['description'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
+            </div>
+        </div>
+
+        {# --- 风险点（长文本） --- #}
+        <div class="drawer-block">
+            <div class="drawer-block-title">{{ icon('alert-circle', 12) }} 风险点</div>
+            <div class="inline-field {{ 'editable' if can_edit }}" data-type="textarea" data-field="risk_note" data-url="{{ field_url }}">
+                <div class="field-value" data-raw="{{ task['risk_note'] or '' }}">{{ task['risk_note'] or '—' }}<span class="field-edit-hint">点击编辑</span></div>
             </div>
         </div>
 
         {# --- 状态流转（沿用现有状态机，drawer-form AJAX 提交） --- #}
         {% if can_edit and allowed_transitions %}
-        <form class="drawer-form" action="{{ url_for('task.task_change_status', task_id=task['task_id']) }}" method="POST">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div class="panel-section-title" style="margin-top:8px;">状态流转</div>
-            <div class="inline-field">
-                <div class="field-label">目标状态</div>
-                <select name="status" class="form-control">
-                    {% for t in allowed_transitions %}
-                    <option value="{{ t['status'] }}">{{ t['label'] }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="inline-field">
-                <div class="field-label">进度备注 / 完成说明</div>
-                <textarea name="progress_note" class="form-control" rows="2" placeholder="填写进度说明或完成情况..."></textarea>
-            </div>
-            <button type="submit" class="btn btn-primary btn-sm">{{ icon('play', 14) }} 确认变更</button>
-        </form>
-        {% elif not can_edit %}
-        <p class="text-muted" style="font-size:12px;">{{ icon('lock', 12) }} 他人任务仅可查看，如需修改请联系管理员</p>
+        <div class="drawer-block">
+            <div class="drawer-block-title">{{ icon('play', 12) }} 状态流转</div>
+            <form class="drawer-form" action="{{ url_for('task.task_change_status', task_id=task['task_id']) }}" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="inline-field">
+                    <div class="field-label">目标状态</div>
+                    <select name="status" class="form-control">
+                        {% for t in allowed_transitions %}
+                        <option value="{{ t['status'] }}">{{ t['label'] }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="inline-field">
+                    <div class="field-label">进度备注 / 完成说明</div>
+                    <textarea name="progress_note" class="form-control" rows="2" placeholder="填写进度说明或完成情况..."></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('play', 14) }} 确认变更</button>
+            </form>
+        </div>
         {% endif %}
 
         {# --- 手动发送提醒邮件（V4，C3-① + H1-②）--- #}
         {% if can_send_mail %}
-        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--color-border-light);">
-            <div class="panel-section-title" style="margin-top:0;">邮件提醒</div>
+        <div class="drawer-block">
+            <div class="drawer-block-title">{{ icon('mail', 12) }} 邮件提醒</div>
             {% if not mail_ready %}
-            <p class="text-muted" style="font-size:12px;">
-                {{ icon('mail', 12) }} 邮件功能未启用或未完成配置，当前仅可发送站内信（管理员请在「邮件」页配置）
+            <p class="text-muted" style="font-size:12px;margin:0;">
+                邮件功能未启用或未完成配置，当前仅可发送站内信（管理员请在「邮件」页配置）
             </p>
             {% else %}
             <form class="drawer-form" action="{{ url_for('task.task_send_mail', task_id=task['task_id']) }}" method="POST">
@@ -163,41 +217,44 @@
         {% endif %}
 
         {# --- 进度时间线 --- #}
-        <div class="panel-section-title" style="margin-top:20px;">进度记录</div>
-        {% if logs %}
-        <ul class="timeline">
-            {% for log in logs %}
-            <li class="timeline-item">
-                <div class="timeline-meta">
-                    <strong>{{ log['operator_name'] or '系统' }}</strong>
-                    · {{ log['operated_at']|format_datetime }}
-                    {% if log['status_from'] and log['status_to'] and log['status_from'] != log['status_to'] %}
-                    · {{ status_labels[log['status_from']] }} → {{ status_labels[log['status_to']] }}
-                    {% elif log['status_from'] and log['status_to'] %}
-                    · 进度更新
-                    {% elif not log['status_from'] and log['status_to'] %}
-                    · {{ status_labels[log['status_to']] }}
+        <div class="drawer-block">
+            <div class="drawer-block-title">{{ icon('clock', 12) }} 进度记录</div>
+            {% if logs %}
+            <ul class="timeline" style="margin-bottom:0;">
+                {% for log in logs %}
+                <li class="timeline-item">
+                    <div class="timeline-meta">
+                        <strong>{{ log['operator_name'] or '系统' }}</strong>
+                        · {{ log['operated_at']|format_datetime }}
+                        {% if log['status_from'] and log['status_to'] and log['status_from'] != log['status_to'] %}
+                        · {{ status_labels[log['status_from']] }} → {{ status_labels[log['status_to']] }}
+                        {% elif log['status_from'] and log['status_to'] %}
+                        · 进度更新
+                        {% elif not log['status_from'] and log['status_to'] %}
+                        · {{ status_labels[log['status_to']] }}
+                        {% endif %}
+                    </div>
+                    {% if log['progress_note'] %}
+                    <div class="timeline-note">{{ log['progress_note'] }}</div>
                     {% endif %}
-                </div>
-                {% if log['progress_note'] %}
-                <div class="timeline-note">{{ log['progress_note'] }}</div>
-                {% endif %}
-            </li>
-            {% endfor %}
-        </ul>
-        {% else %}
-        <p class="text-muted">暂无进度记录</p>
-        {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-muted" style="margin:0;">暂无进度记录</p>
+            {% endif %}
+        </div>
 
         {# --- 危险操作（仅管理员，仅已撤销任务；普通表单提交跳转列表页） --- #}
         {% if can_delete %}
-        <form action="{{ url_for('task.task_delete', task_id=task['task_id']) }}" method="POST"
-              onsubmit="return confirm('确定要永久删除此任务吗？此操作不可撤销！');"
-              style="margin-top:20px;padding-top:16px;border-top:1px solid var(--color-border-light);">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-danger btn-sm">{{ icon('trash', 14) }} 永久删除此任务</button>
-            <span class="text-muted" style="margin-left:8px;font-size:12px;">仅已撤销任务可删除</span>
-        </form>
+        <div class="drawer-danger-block">
+            <form action="{{ url_for('task.task_delete', task_id=task['task_id']) }}" method="POST"
+                  onsubmit="return confirm('确定要永久删除此任务吗？此操作不可撤销！');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-danger btn-sm">{{ icon('trash', 14) }} 永久删除此任务</button>
+                <span class="text-muted" style="margin-left:8px;font-size:12px;">仅已撤销任务可删除</span>
+            </form>
+        </div>
         {% endif %}
     </div>
 
@@ -207,11 +264,10 @@
     <div class="drawer-tab-pane" id="tab-evidence">
 
         {% if can_edit %}
-        <form class="drawer-form" action="{{ url_for('task.task_evidence_add', task_id=task['task_id']) }}" method="POST"
-              style="margin-bottom:16px;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div class="inline-field">
-                <div class="field-label">{{ icon('plus', 13) }} 添加证据</div>
+        <div class="drawer-block">
+            <div class="drawer-block-title">{{ icon('plus', 12) }} 添加证据</div>
+            <form class="drawer-form" action="{{ url_for('task.task_evidence_add', task_id=task['task_id']) }}" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <div style="display:flex;gap:8px;">
                     <select name="etype" class="form-control" style="width:110px;flex-shrink:0;">
                         <option value="text">文字</option>
@@ -221,8 +277,8 @@
                     <input type="text" name="content" class="form-control" placeholder="文字内容 / URL / 文件名..." required>
                     <button type="submit" class="btn btn-primary btn-sm" style="flex-shrink:0;">添加</button>
                 </div>
-            </div>
-        </form>
+            </form>
+        </div>
         {% endif %}
 
         {% if evidence %}
@@ -267,15 +323,14 @@
     <div class="drawer-tab-pane" id="tab-blockers">
 
         {% if can_edit %}
-        <form class="drawer-form" action="{{ url_for('task.task_blocker_add', task_id=task['task_id']) }}" method="POST"
-              style="margin-bottom:16px;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div class="inline-field">
-                <div class="field-label">{{ icon('plus', 13) }} 添加阻塞</div>
+        <div class="drawer-block">
+            <div class="drawer-block-title">{{ icon('plus', 12) }} 添加阻塞</div>
+            <form class="drawer-form" action="{{ url_for('task.task_blocker_add', task_id=task['task_id']) }}" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <textarea name="content" class="form-control" rows="2" placeholder="描述遇到的阻塞/卡点..." required></textarea>
-            </div>
-            <button type="submit" class="btn btn-primary btn-sm">添加</button>
-        </form>
+                <button type="submit" class="btn btn-primary btn-sm" style="margin-top:8px;">添加</button>
+            </form>
+        </div>
         {% endif %}
 
         {% if blockers %}

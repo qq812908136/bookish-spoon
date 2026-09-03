@@ -251,6 +251,21 @@ a:hover { text-decoration: none; }
     font-size: 13px;
 }
 
+/* 头像圆底（通用；顶栏内的 .user-pill .avatar 有更具体的覆盖） */
+.avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
 .user-pill .avatar {
     width: 28px;
     height: 28px;
@@ -809,7 +824,7 @@ input.form-control.date-input:focus::placeholder {
 .panel-overlay, .drawer-overlay {
     position: fixed;
     inset: 0;
-    background-color: rgba(15, 23, 42, 0.45);
+    background-color: rgba(15, 23, 42, 0.32);
     z-index: 200;
     opacity: 0;
     visibility: hidden;
@@ -841,11 +856,26 @@ input.form-control.date-input:focus::placeholder {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--color-border);
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--color-border-light);
     flex-shrink: 0;
     gap: 12px;
 }
+
+/* 头部左侧 / 右侧分组（对齐设计稿：小标签 + 操作区） */
+.drawer-header-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.drawer-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+.drawer-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    font-weight: 500;
+    min-width: 0;
+}
+.drawer-eyebrow .ic { flex-shrink: 0; opacity: 0.75; }
 
 .panel-header h2, .drawer-header h2 {
     font-size: var(--font-size-lg);
@@ -871,7 +901,28 @@ input.form-control.date-input:focus::placeholder {
 
 .panel-close:hover, .drawer-close:hover { color: var(--color-text); background: var(--color-bg-hover); }
 
-.panel-body, .drawer-body { flex: 1; padding: 20px; overflow-y: auto; }
+.panel-body, .drawer-body { flex: 1; padding: 18px 24px 28px; overflow-y: auto; }
+
+/* 细滚动条（对齐设计稿 custom-scrollbar） */
+.drawer, .drawer-body, .panel-body { scrollbar-width: thin; }
+.drawer::-webkit-scrollbar,
+.drawer-body::-webkit-scrollbar,
+.panel-body::-webkit-scrollbar { width: 6px; }
+
+.drawer::-webkit-scrollbar-track,
+.drawer-body::-webkit-scrollbar-track,
+.panel-body::-webkit-scrollbar-track { background: transparent; }
+
+.drawer::-webkit-scrollbar-thumb,
+.drawer-body::-webkit-scrollbar-thumb,
+.panel-body::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+}
+
+.drawer::-webkit-scrollbar-thumb:hover,
+.drawer-body::-webkit-scrollbar-thumb:hover,
+.panel-body::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
 
 .panel-section { margin-bottom: 24px; }
 
@@ -917,6 +968,143 @@ input.form-control.date-input:focus::placeholder {
 
 .drawer-tab-pane { display: none; }
 .drawer-tab-pane.active { display: block; }
+
+/* ============================================================
+   抽屉内容：卡片式区块（对齐「督办仓离线版」设计语言）
+   - 区块标题：12px 弱化小标
+   - 短字段：两列网格 + 浅底信息卡
+   - 长文本 / 进度 / 表单：整块浅底圆角卡
+   ============================================================ */
+
+/* 顶部编辑提示条 */
+.drawer-edit-tip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    margin-bottom: 12px;
+}
+.drawer-edit-tip .ic { flex-shrink: 0; }
+
+/* 大标题（可编辑） */
+.drawer-title-field { margin-bottom: 18px; }
+.drawer-title-field .field-value {
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.45;
+    padding: 8px 10px;
+    background: var(--color-bg-secondary);
+    align-items: flex-start;
+    word-break: break-word;
+}
+
+/* 两列字段网格 */
+.drawer-field-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+/* 浅底信息卡 */
+.drawer-info-card {
+    background: var(--color-bg-secondary);
+    border-radius: 10px;
+    padding: 12px 14px;
+    min-width: 0;
+}
+.drawer-info-card .inline-field { margin-bottom: 0; }
+.drawer-info-card .field-label { font-size: 12px; color: var(--color-text-muted); margin-bottom: 6px; }
+.drawer-info-card .field-value {
+    font-size: 14px;
+    font-weight: 500;
+    background: var(--color-bg);
+    min-height: 32px;
+    padding: 6px 10px;
+    word-break: break-word;
+}
+
+/* 整块卡片（长文本 / 进度 / 表单 / 时间线） */
+.drawer-block {
+    background: var(--color-bg-secondary);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+}
+.drawer-block .panel-section-title { margin-top: 0; }
+
+.drawer-block-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    margin-bottom: 10px;
+}
+.drawer-block-title .ic { flex-shrink: 0; opacity: 0.8; }
+
+/* 卡片内的可编辑值：白底，与浅灰卡片形成层次 */
+.drawer-block .inline-field .field-value {
+    background: var(--color-bg);
+    align-items: flex-start;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+}
+
+/* 卡片内表单控件 */
+.drawer-block .form-control { background: var(--color-bg); }
+
+/* 卡片内的字段间距：相邻字段 12px，末字段不留白（卡片 padding 兜底） */
+.drawer-block .inline-field { margin-bottom: 12px; }
+.drawer-block .inline-field:last-child { margin-bottom: 0; }
+.drawer-block .progress-lg { margin-bottom: 12px; }
+.drawer-block .progress-lg .bar { background: var(--color-border); }
+
+/* 只读信息（无编辑态） */
+.drawer-info-card .inline-field:not(.editable) .field-value {
+    background: transparent;
+    padding-left: 0;
+    padding-right: 0;
+    border-color: transparent;
+    color: var(--color-text-secondary);
+    font-weight: 400;
+}
+
+/* Owner 抽屉 / 消息抽屉里的列表行：白底卡片 + hover 蓝边上浮 */
+.owner-task-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--color-border-light);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    background: var(--color-bg);
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.owner-task-row:hover { border-color: var(--color-primary); box-shadow: var(--shadow-card); }
+.owner-task-title { font-size: 14px; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owner-task-meta {
+    font-size: 11px;
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: var(--color-text-muted);
+}
+.owner-task-right { flex-shrink: 0; display: flex; align-items: center; gap: 10px; }
+
+/* 危险操作块：弱分隔，不做浅底卡片 */
+.drawer-danger-block {
+    margin-top: 4px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-border-light);
+}
 
 /* ============================================================
    行内编辑（抽屉详情页签）
@@ -1686,6 +1874,9 @@ body.page-task-task_list .task-table td:nth-child(4) .mini-progress {
     .user-pill .role-tag { display: none; }
     .slide-panel, .drawer { width: 100vw; }
     .detail-grid { grid-template-columns: 1fr; }
+    /* 抽屉两列字段在手机上改单列，避免信息卡被挤成两行字 */
+    .drawer-field-grid { grid-template-columns: 1fr; }
+    .drawer-header, .drawer-body { padding-left: 16px; padding-right: 16px; }
     .auth-form-side { width: 100%; padding: 32px 20px; }
     .toolbar { flex-direction: column; align-items: stretch; }
     .toolbar .filter-group { width: 100%; }

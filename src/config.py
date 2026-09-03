@@ -52,7 +52,7 @@ STATIC_DIR = os.path.join(BUNDLE_DIR, 'static')
 # 和初始化向导页仍请求旧版本 → 拿到旧 CSS。
 # 现在统一由 app.py 的 inject_globals() 注入 static_version，模板里一律
 # 写 v=static_version，杜绝「改了样式忘了升某个页面」。
-STATIC_VERSION = '20260903c'
+STATIC_VERSION = '20260903d'
 
 # 数据库文件路径（运行时自动创建 data/ 目录）
 # 数据库始终放在 BASE_DIR 下（exe 同级目录），不在临时解压目录

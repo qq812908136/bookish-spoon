@@ -11,8 +11,11 @@
 {% from "macros/icons.html" import icon %}
 
 <div class="drawer-header">
-    <h2>{{ icon('bell', 18) }} 消息通知</h2>
-    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+    <div class="drawer-header-main">
+        <span class="drawer-eyebrow">{{ icon('bell', 14) }} 消息通知</span>
+        {% if unread_count %}<span class="status-badge st-overdue">{{ unread_count }} 条未读</span>{% endif %}
+    </div>
+    <div class="drawer-header-actions">
         {% if current_user['role'] == 'admin' %}
         <a href="{{ url_for('message.send_message') }}" class="btn btn-secondary btn-sm">{{ icon('send', 14) }} 发消息</a>
         {% endif %}

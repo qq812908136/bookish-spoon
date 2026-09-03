@@ -74,6 +74,8 @@ def message_drawer():
         current_type=msg_type,
         type_labels=MESSAGE_TYPE_LABELS,
         type_colors=MESSAGE_TYPE_COLORS,
+        # 061：抽屉头部展示未读条数（0 时模板自动隐藏徽标）
+        unread_count=models.get_unread_count(user['user_id']),
         current_user=user,
     )
 
