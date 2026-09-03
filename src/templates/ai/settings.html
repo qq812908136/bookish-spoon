@@ -50,6 +50,14 @@
 </div>
 
 <div class="card">
+  <div class="card-header">督办简报 / 周报</div>
+  <p class="empty-hint">基于当前预警态势，生成面向管理层的每日简报或每周周报（AI 草稿，需人工确认后发送）。</p>
+  <div class="flex gap-12">
+    <a href="{{ url_for('ai.brief') }}" class="btn btn-primary">生成简报 / 周报</a>
+  </div>
+</div>
+
+<div class="card">
   <div class="card-header">近期生成记录</div>
   {% if logs %}
   <table class="table">

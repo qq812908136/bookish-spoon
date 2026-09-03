@@ -17,6 +17,7 @@ import config
 import db
 import models
 import ai_service
+import ai_templates
 
 
 def enqueue_ai_job(task_id, job_type, prompt):
@@ -117,3 +118,45 @@ def _parse_backoff(raw):
     except (ValueError, AttributeError):
         pass
     return [1, 5, 15]
+
+
+# PR-3 定时生成映射：brief 类型 → ai_queue job_type
+_BRIEF_JOB_TYPES = {
+    'daily': 'daily_brief',
+    'weekly': 'weekly_report',
+}
+
+
+def maybe_run_scheduled_briefs():
+    """PR-3 可选定时：按 AI_BRIEF_SCHEDULE 在每日 09:00 扫描时自动生成简报/周报草稿。
+
+    仅生成「待确认草稿」入队（由既有 5 分钟扫描顺带生成），不自动投递——
+    投递仍需管理员在页面上人工确认（SPEC 人工确认闸）。
+    AI_BRIEF_SCHEDULE='off' 或 AI_ENABLED=False 时立即返回，零副作用。
+    同一天同一类型只入队一次（用 config 去重键按日期记）。
+    """
+    mode = (config.AI_BRIEF_SCHEDULE or 'off').lower()
+    if mode == 'off' or not config.AI_ENABLED:
+        return 0
+    today = datetime.now().strftime('%Y-%m-%d')
+    planned = []
+    if mode in ('daily', 'both'):
+        planned.append('daily')
+    if mode in ('weekly', 'both'):
+        planned.append('weekly')
+    done = 0
+    for btype in planned:
+        job_type = _BRIEF_JOB_TYPES.get(btype, 'daily_brief')
+        key = 'ai_sched_brief_' + job_type
+        if models.get_config(key) == today:
+            continue
+        ctx = models.get_brief_context(btype)
+        if btype == 'daily':
+            prompt = ai_templates.build_daily_brief_prompt(ctx)
+        else:
+            prompt = ai_templates.build_weekly_report_prompt(ctx)
+        qid = enqueue_ai_job(None, job_type, prompt)
+        if qid:
+            models.set_config(key, today)
+            done += 1
+    return done

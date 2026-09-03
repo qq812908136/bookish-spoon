@@ -229,3 +229,29 @@ ai_service ──HTTP(stdlib http.client)──▶ 本地 Ollama / 云端模型 
 - 全量测试通过（含上述新增用例）；`AI_ENABLED=false` 时 `/ai/draft` 跳回控制台、零副作用。
 
 **下一步**：Phase 1 剩余 MVP —— 督办简报 / 周报（PR-3），仍仅管理员可用、仍须人工确认。
+
+### Phase 1 PR-3 — 督办简报 / 周报（已完成，2026-09-03，已提交推送）
+
+把「周期性汇报」从纯模板罗列升级为可由本地模型生成的面向管理层简报 / 周报，仍走 SPEC 人工确认闸（草稿预填 → 管理员核对 → 确认才双渠道发出）。
+
+**锁定决策（苏格拉底编号选项，用户已选）**：
+
+- 简报类型：**每日简报 + 每周周报 两者都要**。
+- 触发方式：**按需为主 + 可选定时（默认关闭）**。
+- 交付形态：**预览 + 人工确认后 站内信 + 邮件 双渠道发出**。
+
+**实现要点（对齐前序：默认关闭、零出域、仅管理员、人工确认、零新增第三方依赖）**：
+
+- `src/config.py`：新增 `AI_BRIEF_SCHEDULE`（默认 `off`，可选 `daily` / `weekly` / `both`）。
+- `src/models.py`：新增 `get_brief_context(brief_type)` 纯查询聚合（daily：逾期 / 即将到期 3 天窗口 / 长期待激活 ≥7 天 / 进行中；weekly：近 7 天新建 / 闭环、当前逾期 / 进行中 / 待启动、风险点 / 停滞、逾期清单），列表项转普通 dict 便于提示词拼接。
+- `src/ai_templates.py`：新增 `_fmt_task_lines` + `build_daily_brief_prompt` + `build_weekly_report_prompt`（要求模型输出纯文本简报正文，不臆造数字、不使用 Markdown）。
+- `src/ai_dispatcher.py`：新增 `maybe_run_scheduled_briefs()`（按 `AI_BRIEF_SCHEDULE` 在每日 09:00 扫描时自动入队「待确认草稿」，同天同类型去重；未启用 / 关闭时零副作用），并接入 `scheduler._warning_scan_loop`（复用既有线程，**不新增线程**）。
+- `src/routes/ai_routes.py`：新增 `GET/POST /ai/brief`（选类型 → 同步生成草稿）、`GET /ai/brief/<log_id>`（预览，正文可编辑）、`POST /ai/brief/<log_id>/send`（确认发送）。**站内信发给全体活跃管理员（不依赖邮箱）**；**邮件仅发给有邮箱且未关闭订阅的管理员**（新 `ai_brief` 类型，`mail_constants.MAIL_TYPE_AI_BRIEF` + `MESSAGE_TYPE_LABELS`/`MESSAGE_TYPE_COLORS` 已登记）。
+- `src/templates/ai/brief.html`、`brief_result.html`：生成入口 + 预览 / 确认页（CSRF、生成失败不提供发送入口）。AI 控制台 `settings.html` 新增「生成简报 / 周报」入口。
+
+**验证**：
+
+- 新增 `tests/test_suite.py::TestAIBrief`（7 用例）：入口权限（admin 可见 / 未启用跳控制台 / owner 403）、生成后预览预填正文、确认发送站内信给管理员、启用邮件时入队邮件（按订阅等级去重）、生成失败回显且不提供发送入口。
+- 全量测试通过；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表 / 无渲染 / 无报错）。
+
+**下一步**：Phase 1 三件 MVP 全部落地，进入 Phase 2（自然语言查询只读、熔断演练等）。

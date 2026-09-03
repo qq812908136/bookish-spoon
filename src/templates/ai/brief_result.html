@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ label }} - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-left">
+    <h1 class="page-title">{{ label }}</h1>
+    <span class="page-hint">AI 生成的草稿，请核对后确认发送。发送前可自由编辑正文。</span>
+  </div>
+  <div class="page-header-actions">
+    <a href="{{ url_for('ai.brief') }}" class="btn btn-secondary">返回列表</a>
+  </div>
+</div>
+
+{% if error %}
+<div class="mail-banner danger">
+  <strong>生成失败</strong>
+  <span>{{ error }}</span>
+</div>
+<p class="empty-hint">本次 AI 生成失败，无法发送该简报。可返回重新生成，或在控制台确认本地模型配置。</p>
+{% else %}
+
+<div class="card">
+  <div class="card-header">草稿正文（可编辑）</div>
+  <form method="post" action="{{ url_for('ai.brief_send', log_id=log.log_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-group">
+      <textarea id="content" name="content" class="form-control" rows="14"
+                placeholder="在此填写 / 编辑简报正文…">{{ content }}</textarea>
+    </div>
+    <div class="flex gap-12" style="align-items:center;">
+      <button type="submit" class="btn btn-primary">确认发送</button>
+      {% if log.adopted %}
+      <span class="status-badge gray">该简报已发送过</span>
+      {% endif %}
+    </div>
+    <p class="empty-hint" style="margin-top:10px;">
+      确认后将通过<strong>站内信</strong>发送给全体管理员
+      {% if mail_enabled %}；同时<strong>入队邮件</strong>（按各自订阅等级去重）。{% else %}。当前未启用邮件，仅发送站内信。{% endif %}
+    </p>
+  </form>
+</div>
+
+{% endif %}
+
+{% endblock %}

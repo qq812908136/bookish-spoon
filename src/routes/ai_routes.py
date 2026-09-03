@@ -22,6 +22,7 @@ import db
 import models
 import ai_templates
 import ai_dispatcher
+import mail_constants
 from auth import login_required, admin_required, get_current_user
 from state_machine import ALL_PRIORITIES, PRIORITY_LABELS
 
@@ -246,3 +247,92 @@ def draft_result(log_id):
         is_edit=False,
         ai_draft_log_id=log['log_id'],
     )
+
+
+# ============================================================
+# PR-3：督办简报 / 周报（管理员）
+# ============================================================
+_BRIEF_JOB_TYPES = {'daily': 'daily_brief', 'weekly': 'weekly_report'}
+_BRIEF_LABELS = {'daily': '每日督办简报', 'weekly': '每周督办周报'}
+
+
+@ai_bp.route('/ai/brief', methods=['GET', 'POST'])
+@admin_required
+def brief():
+    if not config.AI_ENABLED:
+        flash('AI 功能未启用，无法生成。请在 .env 中设置 AI_ENABLED=true 并配置本地模型。', 'warning')
+        return redirect(url_for('ai.console'))
+    if request.method == 'POST':
+        brief_type = request.form.get('brief_type', 'daily')
+        if brief_type not in _BRIEF_JOB_TYPES:
+            brief_type = 'daily'
+        ctx = models.get_brief_context(brief_type)
+        prompt = (ai_templates.build_daily_brief_prompt(ctx) if brief_type == 'daily'
+                  else ai_templates.build_weekly_report_prompt(ctx))
+        queue_id = ai_dispatcher.enqueue_ai_job(None, _BRIEF_JOB_TYPES[brief_type], prompt)
+        if not queue_id:
+            flash('入队失败，请稍后重试。', 'danger')
+            return redirect(url_for('ai.brief'))
+        log_id = ai_dispatcher.run_job_now(queue_id)
+        return redirect(url_for('ai.brief_result', log_id=log_id or ''))
+    logs = [l for l in models.list_ai_logs(50) if l['job_type'] in ('daily_brief', 'weekly_report')]
+    return render_template('ai/brief.html', current_user=get_current_user(), logs=logs, labels=_BRIEF_LABELS)
+
+
+@ai_bp.route('/ai/brief/<int:log_id>', methods=['GET'])
+@admin_required
+def brief_result(log_id):
+    log = models.get_ai_log(log_id)
+    if not log:
+        flash('记录不存在。', 'danger'); return redirect(url_for('ai.brief'))
+    if log['job_type'] not in ('daily_brief', 'weekly_report'):
+        flash('该记录不是简报/周报。', 'danger'); return redirect(url_for('ai.console'))
+    is_weekly = log['job_type'] == 'weekly_report'
+    label = _BRIEF_LABELS['weekly' if is_weekly else 'daily']
+    content = (log['result_text'] or '') if log['success'] else ''
+    error = '' if log['success'] else (log['error_message'] or '未知错误')
+    return render_template('ai/brief_result.html', current_user=get_current_user(),
+                           log=log, content=content, error=error, label=label,
+                           mail_enabled=bool(config.MAIL_ENABLED))
+
+
+@ai_bp.route('/ai/brief/<int:log_id>/send', methods=['POST'])
+@admin_required
+def brief_send(log_id):
+    log = models.get_ai_log(log_id)
+    if not log or not log['success']:
+        flash('该记录不可发送（生成失败或不存在）。', 'danger'); return redirect(url_for('ai.brief'))
+    if log['adopted']:
+        flash('该简报已发送过。', 'danger'); return redirect(url_for('ai.brief'))
+    raw = request.form.get('content')
+    content = (raw if raw is not None else (log['result_text'] or '')).strip()
+    if not content:
+        flash('简报内容为空，无法发送。', 'danger'); return redirect(url_for('ai.brief_result', log_id=log_id))
+    admin = get_current_user()
+    # 站内信：发给全体活跃管理员（不依赖邮箱，确保管理员都能看到）
+    admin_rows = db.query(
+        "SELECT user_id FROM users WHERE role = 'admin' AND is_active = 1")
+    admin_ids = [r['user_id'] for r in admin_rows]
+    for uid in admin_ids:
+        models.create_message(recipient=uid, sender=admin['user_id'],
+                              msg_type='ai_brief', content=content[:2000], task_id=None)
+    # 邮件：仅发给有邮箱且未关闭订阅的管理员（与站内信是两条独立渠道）
+    mailed = 0
+    is_weekly = log['job_type'] == 'weekly_report'
+    label = _BRIEF_LABELS['weekly' if is_weekly else 'daily']
+    if config.MAIL_ENABLED:
+        subject = '督办' + label
+        for a in models.get_mail_subscribers(role_filter='admin'):
+            if (a['mail_notify_level'] or mail_constants.LEVEL_OVERDUE) == mail_constants.LEVEL_OFF:
+                continue
+            dedup = 'ai_brief:%d:%d' % (a['user_id'], log_id)
+            if models.has_dedup_key(dedup):
+                continue
+            if models.enqueue_email(recipient_id=a['user_id'], recipient_email=a['email'],
+                    mail_type=mail_constants.MAIL_TYPE_AI_BRIEF, subject=subject,
+                    body=content, dedup_key=dedup):
+                mailed += 1
+    models.mark_ai_log_adopted(log_id)
+    extra = ('，邮件 %d 封已入队' % mailed) if mailed else ''
+    flash('已发送%s给 %d 位管理员（站内信%s）。' % (label, len(admin_ids), extra), 'success')
+    return redirect(url_for('ai.brief'))

@@ -134,6 +134,11 @@ def _warning_scan_loop(app):
                     if last_scan_date != today:
                         app.logger.info(f'开始每日预警扫描 ({today} {scan_time})')
                         warning_engine.run_warning_scan()
+                        # PR-3：按 AI_BRIEF_SCHEDULE 可选定时生成简报/周报草稿（人工确认后才投递）
+                        try:
+                            ai_dispatcher.maybe_run_scheduled_briefs()
+                        except Exception as e:
+                            app.logger.error(f'定时简报生成异常: {e}')
                         last_scan_date = today
                         app.logger.info('每日预警扫描完成')
 

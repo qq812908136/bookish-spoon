@@ -428,6 +428,10 @@ AI_CIRCUIT_FAIL_THRESHOLD = _env_int('AI_CIRCUIT_FAIL_THRESHOLD', 10)
 # 通用熔断的暂停时长（分钟）
 AI_CIRCUIT_PAUSE_MINUTES = _env_int('AI_CIRCUIT_PAUSE_MINUTES', 60)
 
+# 简报/周报定时生成开关（PR-3）：'off'（默认，不定时）/ 'daily' / 'weekly' / 'both'。
+# 仅在 AI_ENABLED=True 时生效；复用 09:00 扫描自动生成草稿入队，需管理员人工确认后才投递。
+AI_BRIEF_SCHEDULE = _env_str('AI_BRIEF_SCHEDULE', 'off')
+
 # 注：AI_API_KEY 不在此处读取。
 #     它只有一处来源：环境变量 / .env（明文，由 ai_service 直接读取）。
 #     刻意不进 config 默认值，避免密钥被模块级常量固化或误打印。

@@ -2075,6 +2075,88 @@ def get_overdue_tasks_by_assignee():
     return grouped
 
 
+def get_brief_context(brief_type):
+    """聚合「每日简报 / 每周周报」所需的数据上下文（PR-3）。
+
+    纯查询聚合，不落地、不调用模型。列表项转成普通 dict 便于提示词拼接。
+
+    Args:
+        brief_type: 'daily' 或 'weekly'
+    Returns:
+        dict: 含计数与任务清单
+    """
+    today = datetime.now().strftime('%Y-%m-%d')
+    now = datetime.now()
+
+    def _rowlist(rows):
+        return [dict(r) for r in rows]
+
+    if brief_type == 'daily':
+        overdue = get_overdue_tasks_with_names()
+        due_end = (now + timedelta(days=3)).strftime('%Y-%m-%d')
+        due_soon = db.query(
+            "SELECT t.title, t.due_date, t.priority, u.display_name AS assignee_name "
+            "FROM tasks t LEFT JOIN users u ON t.assignee = u.user_id "
+            "WHERE t.status IN ('pending', 'in_progress') "
+            "  AND t.due_date > ? AND t.due_date <= ? "
+            "ORDER BY t.due_date ASC",
+            (today, due_end))
+        inactive_cutoff = (now - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
+        long_inactive = db.query(
+            "SELECT t.title, t.created_at, u.display_name AS assignee_name "
+            "FROM tasks t LEFT JOIN users u ON t.assignee = u.user_id "
+            "WHERE t.status = 'pending' AND t.created_at < ? "
+            "ORDER BY t.created_at ASC",
+            (inactive_cutoff,))
+        in_progress = db.query_one(
+            "SELECT COUNT(*) AS c FROM tasks WHERE status = 'in_progress'")['c']
+        return {
+            'brief_type': 'daily',
+            'today': today,
+            'overdue': _rowlist(overdue[:15]),
+            'overdue_count': len(overdue),
+            'due_soon': _rowlist(due_soon[:15]),
+            'due_soon_count': len(due_soon),
+            'long_inactive': _rowlist(long_inactive[:15]),
+            'long_inactive_count': len(long_inactive),
+            'in_progress': in_progress,
+        }
+
+    # weekly：近 7 天（含今日）聚合 + 当前快照
+    week_start = (now - timedelta(days=6)).strftime('%Y-%m-%d')
+    new_week = db.query_one(
+        "SELECT COUNT(*) AS c FROM tasks WHERE created_at >= ?", (week_start,))['c']
+    closed_week = db.query_one(
+        "SELECT COUNT(*) AS c FROM tasks "
+        "WHERE status = 'closed' AND closed_at >= ?", (week_start,))['c']
+    overdue = db.query_one("SELECT COUNT(*) AS c FROM tasks WHERE status = 'overdue'")['c']
+    in_progress = db.query_one(
+        "SELECT COUNT(*) AS c FROM tasks WHERE status = 'in_progress'")['c']
+    pending = db.query_one("SELECT COUNT(*) AS c FROM tasks WHERE status = 'pending'")['c']
+    risk = db.query_one(
+        "SELECT COUNT(*) AS c FROM tasks "
+        "WHERE risk_note IS NOT NULL AND TRIM(risk_note) != '' "
+        "  AND status IN ('pending', 'in_progress', 'overdue')")['c']
+    stalled = db.query_one(
+        "SELECT COUNT(*) AS c FROM tasks "
+        "WHERE status = 'in_progress' "
+        "  AND (progress_percent IS NULL OR progress_percent = 0)")['c']
+    overdue_list = get_overdue_tasks_with_names()
+    return {
+        'brief_type': 'weekly',
+        'week_start': week_start,
+        'today': today,
+        'new_this_week': new_week,
+        'closed_this_week': closed_week,
+        'overdue': overdue,
+        'in_progress': in_progress,
+        'pending': pending,
+        'risk_count': risk,
+        'stalled_count': stalled,
+        'overdue_list': _rowlist(overdue_list[:15]),
+    }
+
+
 def has_recent_manual_mail(task_id, operator_id, cooldown_seconds):
     """手动发送冷却检查（F4-②）。
 
