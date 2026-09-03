@@ -15,6 +15,7 @@ from datetime import datetime
 import config
 import db
 import mail_dispatcher
+import ai_dispatcher
 import models
 import warning_engine
 from state_machine import TaskStatus

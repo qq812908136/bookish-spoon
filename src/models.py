@@ -138,6 +138,9 @@ def init_db():
     # V3 迁移：邮件功能——users 加 2 列 + email_queue/email_log 两张新表
     _migrate_v3()
 
+    # V4 迁移：AI 辅助生成——ai_queue / ai_log 两张新表（Phase 0）
+    _migrate_v4()
+
 
 def _migrate_v2():
     """V2 数据库迁移（幂等，可重复调用）。
@@ -1389,6 +1392,232 @@ def reset_fail_streak():
     if state.get('fail_streak'):
         state['fail_streak'] = 0
         set_config('mail_circuit_state', json.dumps(state, ensure_ascii=False))
+
+
+# --- C. AI 能力（V5 迭代「AI 辅助生成」，Phase 0） -------------------------
+
+def _migrate_v4():
+    """V4 数据库迁移：AI 辅助生成（幂等，可重复调用）。
+
+    内容：
+    1. 新建 ai_queue（生成任务队列）/ ai_log（生成历史）两张表 + 索引
+    2. AI 熔断状态复用 system_config 的 'ai_circuit_state' 键（无需新表）
+
+    与 _migrate_v2/_migrate_v3 同一套路：CREATE IF NOT EXISTS 天然幂等，
+    异常只打印不阻断启动。
+    """
+    conn = db.get_db()
+    try:
+        conn.executescript("""
+        -- AI 生成任务队列：先落这里，由调度器每 5 分钟扫描执行（V5）
+        CREATE TABLE IF NOT EXISTS ai_queue (
+            queue_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         INTEGER,
+            job_type        TEXT    NOT NULL,
+            prompt          TEXT    NOT NULL,
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            retry_count     INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT    NOT NULL,
+            last_error      TEXT,
+            created_at      TEXT    NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+        );
+
+        -- AI 生成历史：成功/失败后从队列转入此表
+        CREATE TABLE IF NOT EXISTS ai_log (
+            log_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id        INTEGER,
+            job_type       TEXT    NOT NULL,
+            success        INTEGER NOT NULL,
+            result_text    TEXT,
+            error_message  TEXT,
+            attempts       INTEGER NOT NULL DEFAULT 1,
+            adopted        INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT    NOT NULL,
+            finished_at    TEXT    NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_queue_status
+            ON ai_queue(status, next_attempt_at);
+        CREATE INDEX IF NOT EXISTS idx_ai_queue_task
+            ON ai_queue(task_id);
+        CREATE INDEX IF NOT EXISTS idx_ai_log_created
+            ON ai_log(created_at);
+        """)
+        conn.commit()
+    except Exception as e:  # pragma: no cover - 迁移失败不阻断启动
+        print(f"[migrate_v4] 迁移异常（不影响启动）: {e}")
+
+
+def enqueue_ai_job(task_id, job_type, prompt):
+    """把一个 AI 生成任务放入队列（task_id 可空，如通用任务）。
+
+    Returns:
+        int: 新记录 queue_id；异常时返回 None
+    """
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        return db.execute(
+            "INSERT INTO ai_queue "
+            "(task_id, job_type, prompt, status, retry_count, next_attempt_at, created_at) "
+            "VALUES (?, ?, ?, 'pending', 0, ?, ?)",
+            (task_id, job_type, prompt, now, now)
+        )
+    except Exception:
+        return None
+
+
+def fetch_due_ai_jobs(limit):
+    """取出到期待处理 AI 任务（按创建时间升序）。"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return db.query(
+        "SELECT * FROM ai_queue "
+        "WHERE status = 'pending' AND next_attempt_at <= ? "
+        "ORDER BY created_at ASC LIMIT ?",
+        (now, limit)
+    )
+
+
+def mark_ai_jobs_sending(queue_ids):
+    """批量标记为生成中。"""
+    if not queue_ids:
+        return
+    placeholders = ','.join('?' * len(queue_ids))
+    conn = db.get_db()
+    conn.execute(
+        f"UPDATE ai_queue SET status = 'sending' WHERE queue_id IN ({placeholders})",
+        tuple(queue_ids))
+    conn.commit()
+
+
+def mark_ai_job_done(queue_id, result_text, task_id, job_type):
+    """标记生成成功：写入历史表并从队列移除。"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    row = db.query_one("SELECT * FROM ai_queue WHERE queue_id = ?", (queue_id,))
+    if not row:
+        return
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO ai_log "
+            "(task_id, job_type, success, result_text, attempts, created_at, finished_at) "
+            "VALUES (?, ?, 1, ?, 1, ?, ?)",
+            (task_id, job_type, result_text, row['created_at'], now))
+        conn.execute("DELETE FROM ai_queue WHERE queue_id = ?", (queue_id,))
+
+
+def mark_ai_job_failed(queue_id, error_message, retry_max=3, backoff=None):
+    """标记生成失败：可重试排到下次，超过 retry_max 则归档到历史表。
+
+    Returns:
+        str: 'retrying' / 'failed'
+    """
+    backoff = backoff or [1, 5, 15]
+    now_dt = datetime.now()
+    now = now_dt.strftime('%Y-%m-%d %H:%M:%S')
+    row = db.query_one("SELECT * FROM ai_queue WHERE queue_id = ?", (queue_id,))
+    if not row:
+        return 'failed'
+
+    retry_count = int(row['retry_count'] or 0) + 1
+    if retry_count > retry_max:
+        with db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO ai_log "
+                "(task_id, job_type, success, error_message, attempts, created_at, finished_at) "
+                "VALUES (?, ?, 0, ?, ?, ?, ?)",
+                (row['task_id'], row['job_type'], error_message, retry_count,
+                 row['created_at'], now))
+            conn.execute("DELETE FROM ai_queue WHERE queue_id = ?", (queue_id,))
+        return 'failed'
+
+    idx = min(retry_count - 1, len(backoff) - 1)
+    next_at = (now_dt + timedelta(minutes=backoff[idx])).strftime('%Y-%m-%d %H:%M:%S')
+    db.execute(
+        "UPDATE ai_queue SET status = 'pending', retry_count = ?, "
+        "next_attempt_at = ?, last_error = ? WHERE queue_id = ?",
+        (retry_count, next_at, error_message, queue_id))
+    return 'retrying'
+
+
+def reset_stuck_ai_jobs():
+    """把卡在 sending 的记录重置为 pending（程序被强杀后的恢复）。"""
+    conn = db.get_db()
+    cursor = conn.execute(
+        "UPDATE ai_queue SET status = 'pending' WHERE status = 'sending'")
+    conn.commit()
+    return cursor.rowcount
+
+
+def get_ai_circuit_state():
+    """读取 AI 熔断状态。
+
+    Returns:
+        dict: {'state': 'closed'|'open', 'reason': str,
+               'opened_at': str|None, 'resume_at': str|None, 'fail_streak': int}
+    """
+    raw = get_config('ai_circuit_state')
+    default = {'state': 'closed', 'reason': '', 'opened_at': None,
+               'resume_at': None, 'fail_streak': 0}
+    if not raw:
+        return default
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            default.update(parsed)
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
+def set_ai_circuit_state(state, reason='', resume_at=None, fail_streak=0, opened_at=None):
+    """写入 AI 熔断状态（state='open' 且未传 opened_at 时自动取当前时间）。"""
+    if state == 'open' and not opened_at:
+        opened_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if state == 'closed':
+        opened_at = None
+        resume_at = None
+        reason = ''
+        fail_streak = 0
+    set_config('ai_circuit_state', json.dumps({
+        'state': state,
+        'reason': reason,
+        'opened_at': opened_at,
+        'resume_at': resume_at,
+        'fail_streak': fail_streak,
+    }, ensure_ascii=False))
+
+
+def bump_ai_fail_streak():
+    """连续失败计数 +1，返回新值。"""
+    state = get_ai_circuit_state()
+    state['fail_streak'] = int(state.get('fail_streak') or 0) + 1
+    set_config('ai_circuit_state', json.dumps(state, ensure_ascii=False))
+    return state['fail_streak']
+
+
+def reset_ai_fail_streak():
+    """生成成功后清零连续失败计数。"""
+    state = get_ai_circuit_state()
+    if state.get('fail_streak'):
+        state['fail_streak'] = 0
+        set_config('ai_circuit_state', json.dumps(state, ensure_ascii=False))
+
+
+def get_ai_log(log_id):
+    """读取单条 AI 生成历史。"""
+    return db.query_one("SELECT * FROM ai_log WHERE log_id = ?", (log_id,))
+
+
+def list_ai_logs(limit=50):
+    """近期 AI 生成历史（按创建时间倒序）。"""
+    return db.query(
+        "SELECT * FROM ai_log ORDER BY created_at DESC LIMIT ?", (limit,))
+
+
+def mark_ai_log_adopted(log_id):
+    """标记某条 AI 生成结果已被采纳（发出站内信）。"""
+    db.execute("UPDATE ai_log SET adopted = 1 WHERE log_id = ?", (log_id,))
 
 
 # --- B. 用户邮箱与订阅等级 -------------------------------------------------
