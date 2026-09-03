@@ -1,15 +1,17 @@
-"""routes/ai_routes.py — AI 辅助生成路由（V5 迭代，Phase 0）
+"""routes/ai_routes.py — AI 辅助生成路由（V5 迭代，Phase 0 / Phase 1）
 
 包含：
 - GET  /ai                AI 控制台（管理员）：功能开关状态 + 近期生成记录 + 触发入口
 - POST /ai/trigger        为某任务入队一条「催办话术」生成任务（管理员）
 - GET  /ai/result/<id>    查看某条 AI 生成结果（管理员）
 - POST /ai/adopt/<id>     人工确认采纳：把生成结果作为站内信发给任务负责人（管理员）
+- GET/POST /ai/draft      任务描述结构化抽取入口（管理员，PR-2）
+- GET  /ai/draft/<id>     展示 AI 结构化草稿（可编辑预填，确认后交由建任务流程落库）
 
 设计要点（对齐邮件子系统 + SPEC v1.0 铁律）：
 1. AI_ENABLED=False 时所有页面仍可达（只读展示），但触发入队被拒并提示。
-2. AI 输出只用于「展示 / 预填」，必须经管理员人工确认（adopt）才会真正发出，
-   绝不自动落库为站内信或证据——这是 SPEC 明确的人工确认闸。
+2. AI 输出只用于「展示 / 预填」，必须经管理员人工确认（adopt / 确认建任务）才会真正生效，
+   绝不自动落库为站内信、证据或任务——这是 SPEC 明确的人工确认闸。
 3. 调用模型失败不会抛异常到页面：由 ai_dispatcher 吞掉并记录，页面只显示状态。
 """
 
@@ -21,6 +23,7 @@ import models
 import ai_templates
 import ai_dispatcher
 from auth import login_required, admin_required, get_current_user
+from state_machine import ALL_PRIORITIES, PRIORITY_LABELS
 
 ai_bp = Blueprint('ai', __name__)
 
@@ -167,3 +170,79 @@ def adopt(log_id):
     if request.form.get('next') == 'detail' and log['task_id']:
         return redirect(url_for('task.task_detail', task_id=log['task_id']))
     return redirect(url_for('ai.result', log_id=log_id))
+
+
+# ============================================================
+# PR-2：任务描述结构化抽取（管理员）
+# ============================================================
+
+@ai_bp.route('/ai/draft', methods=['GET', 'POST'])
+@admin_required
+def draft():
+    """任务描述结构化抽取：粘贴自由文本 → 同步生成结构化草稿 → 预填建任务表单。
+
+    同步生成复用 ai_dispatcher.run_job_now，免去等 5 分钟扫描周期。
+    确认建任务仍走既有 task.task_new（仅调用 create_task，AI 模块不改它），
+    所有字段经管理员人工确认后才落库。
+    """
+    if not config.AI_ENABLED:
+        flash('AI 功能未启用，无法生成。请在 .env 中设置 AI_ENABLED=true 并配置本地模型。',
+              'warning')
+        return redirect(url_for('ai.console'))
+
+    if request.method == 'POST':
+        raw_text = (request.form.get('raw_text') or '').strip()
+        if not raw_text:
+            flash('请先粘贴需要整理的任务描述文本。', 'warning')
+            return redirect(url_for('ai.draft'))
+
+        prompt = ai_templates.build_structured_task_prompt(raw_text)
+        queue_id = ai_dispatcher.enqueue_ai_job(None, 'draft_task', prompt)
+        if not queue_id:
+            flash('入队失败，请稍后重试。', 'danger')
+            return redirect(url_for('ai.draft'))
+        log_id = ai_dispatcher.run_job_now(queue_id)
+        return redirect(url_for('ai.draft_result', log_id=log_id or ''))
+
+    return render_template('ai/draft_input.html', current_user=get_current_user())
+
+
+@ai_bp.route('/ai/draft/<int:log_id>', methods=['GET'])
+@admin_required
+def draft_result(log_id):
+    """展示 AI 结构化草稿：可编辑预填表单，确认后交由既有建任务流程落库。
+
+    解析失败或生成失败时，退化为「把原文/错误放进 description」的人工录入，
+    仍由管理员补全后确认——绝不自动建任务。
+    """
+    log = models.get_ai_log(log_id)
+    if not log:
+        flash('记录不存在。', 'danger')
+        return redirect(url_for('ai.console'))
+
+    draft = ai_templates.parse_structured_task(log['result_text']) if log['success'] else None
+    if not draft:
+        draft = {
+            'title': '',
+            'priority': 'medium',
+            'due_date': '',
+            'risk_note': '',
+            'collaborators': '',
+            'description': (log['result_text'] or '') if log['success']
+                           else ('生成失败：' + (log['error_message'] or '未知错误')),
+        }
+
+    # 复用既有「新建任务」表单（tasks/form.html），把 AI 抽取结果作为 form_data 预填。
+    # 确认动作仍由 task.task_new 处理（仅调用 create_task，AI 模块不改动它），
+    # 所有字段经管理员人工核对后才落库——满足 SPEC 人工确认闸。
+    active_users = models.get_all_active_users()
+    return render_template(
+        'tasks/form.html',
+        current_user=get_current_user(),
+        active_users=active_users,
+        priorities=ALL_PRIORITIES,
+        priority_labels=PRIORITY_LABELS,
+        form_data=draft,
+        is_edit=False,
+        ai_draft_log_id=log['log_id'],
+    )

@@ -18,13 +18,14 @@
 - **本地优先（零出域）**：默认 `AI_PROVIDER=local` 走本机 Ollama（`http://127.0.0.1:11434`），数据不出内网；`cloud` 模式预留 OpenAI 兼容接口（密钥仅来自环境变量，不入代码默认值）。
 - **管理员控制台**（`/ai`）：开关与配置概览、近期生成记录、为任务一键入队「催办话术」生成。
 - **任务详情页 AI 催办话术卡片（Phase 1 ②）**：管理员在任务详情页点「生成催办话术」即**同步生成并页面内预填**到可编辑文本框，修改后点「确认发送给负责人」才作为站内信发出；生成失败回显错误并可重新生成。**未启用 AI 或非管理员均看不到入口。**
+- **任务描述结构化抽取预填（Phase 1 PR-2）**：管理员在「AI 辅助」控制台点「AI 结构化建任务」粘贴自由文本（会议纪要 / 口头交代 / 需求片段），**同步生成**后把 title / 优先级 / 截止日 / 协同方 / 风险点 / 描述抽取为结构化草稿，**复用既有「新建任务」表单预填**。管理员核对字段后点「创建任务」才真正建档——AI 模块不碰 `create_task`（仅由 `task.task_new` 调用它）。生成失败 / 解析失败时退化为「把错误原文放进 description」的人工录入，绝不自动建档。**未启用 AI 或非管理员不可用。**
 - **人工确认闸**：AI 输出只展示/预填，必须经管理员点「确认」才作为站内信发出——绝不自动落库 / 自动发消息（对应 SPEC Q5 锁定）。确认时以**人编辑后的内容**为准，仍属人工确认范畴。
 - **脱敏**：送模型前按 `AI_MASK_DATA`（默认开）遮蔽手机号 / 邮箱 / 证件号。
 - **熔断**：连续失败超阈值暂停并自动试探恢复；错误日志不含 API Key。
 
 #### 技术说明（AI 功能）
 
-- 新增模块：`ai_templates.py`、`ai_service.py`、`ai_dispatcher.py`、`routes/ai_routes.py`；模板 `templates/ai/settings.html`、`templates/ai/result.html`；详情页 `templates/tasks/detail.html` 新增 AI 卡片。
+- 新增模块：`ai_templates.py`、`ai_service.py`、`ai_dispatcher.py`、`routes/ai_routes.py`；模板 `templates/ai/settings.html`、`templates/ai/result.html`、`templates/ai/draft_input.html`；详情页 `templates/tasks/detail.html` 新增 AI 卡片。结构化草稿**复用** `templates/tasks/form.html` 作为预填表单（不新建草稿专用表单，避免与建任务表单重复）。
 - 数据库幂等迁移 `_migrate_v4()`：新建 `ai_queue`（生成任务队列）/ `ai_log`（生成历史）两表。**老库直接升级即可，不需重新初始化。**
 - AI 任务先落库进队列，由**已有的**每 5 分钟逾期扫描循环顺带执行（`scheduler._overdue_scan_loop` 内 `ai_dispatcher.scan_and_run()`），**不新增线程**；详情页「立即生成」走 `ai_dispatcher.run_job_now()` 同步单次运行（复用同一 `_run_one`，失败直接归档方便回显）。
 - 刻意不改 `models.create_message()`——AI 仅调用它（采纳时发站内信），不改动既有站内信逻辑。
@@ -32,7 +33,7 @@
 
 ### 验证
 
-- 全量测试通过（含 `TestAIDraftReminder` 新增用例：入口渲染权限、生成后预填可编辑、确认采纳发站内信、空内容拒绝、失败回显）；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表写入 / 无渲染 / 无报错）。
+- 全量测试通过（含 `TestAIDraftReminder` + `TestAIStructuredTaskDraft` 新增用例：入口渲染权限、生成后预填可编辑、确认采纳发站内信、空内容拒绝、失败回显；结构化抽取预填、复用建任务表单建档、失败回退人工录入）；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表写入 / 无渲染 / 无报错）。
 
 ---
 

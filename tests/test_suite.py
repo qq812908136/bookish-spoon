@@ -3689,6 +3689,164 @@ class TestAIDraftReminder(unittest.TestCase):
         self.assertIn('重新生成', html)
 
 
+class TestAIStructuredTaskDraft(unittest.TestCase):
+    """V5 Phase 1 PR-2：任务描述结构化抽取预填。
+
+    覆盖：管理员入口渲染、未启用/非管理员拦截、AI 抽取后预填到建任务表单、
+    确认后走既有 task.task_new 正常建档（AI 不碰 create_task）、生成失败回退人工录入。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app()
+        cls.app.config['TESTING'] = True
+
+    def setUp(self):
+        reset_database()
+        conn = db.get_db()
+        conn.execute('DELETE FROM ai_queue')
+        conn.execute('DELETE FROM ai_log')
+        conn.commit()
+        self.client = make_client(self.app)
+        self._orig_ai = config.AI_ENABLED
+        self._orig_call = ai_service.call_model
+        self.admin_id = create_test_user('admin', '管理员',
+                                         password='admin123456', role='admin')
+        self.owner_id = create_test_user('owner', '张三',
+                                         password='owner123456', role='owner')
+
+    def tearDown(self):
+        config.AI_ENABLED = self._orig_ai
+        ai_service.call_model = self._orig_call
+
+    def _login(self, username, password):
+        return self.client.post(
+            '/login', data={'username': username, 'password': password},
+            follow_redirects=False)
+
+    def _html(self, resp):
+        return resp.data.decode('utf-8')
+
+    def _enable_ai(self, text):
+        """开启 AI 并把模型调用替换成可控的假响应（text 即模型输出）。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': True, 'text': text, 'error': None}
+
+    def _json_draft(self):
+        return (
+            '{"title":"完成季度汇报材料","priority":"high","due_date":"2026-09-20",'
+            '"risk_note":"数据口径尚未对齐","collaborators":"财务部、信息中心",'
+            '"description":"王五牵头，下周三前完成季度汇报材料。"}'
+        )
+
+    # --- 入口渲染 / 权限 ---
+
+    def test_admin_sees_draft_input_when_enabled(self):
+        """AI 启用且为管理员时，应看到粘贴原始文本的入口。"""
+        self._enable_ai(self._json_draft())
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/ai/draft'))
+        self.assertIn('name="raw_text"', html)
+        self.assertIn('生成结构化草稿', html)
+
+    def test_disabled_redirects_to_console(self):
+        """AI 未启用时 GET /ai/draft 应跳转回控制台，不渲染入口。"""
+        self._login('admin', 'admin123456')
+        resp = self.client.get('/ai/draft')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/ai', resp.headers.get('Location', ''))
+
+    def test_owner_cannot_access_draft(self):
+        """AI 仅管理员可用，负责人访问应被拒（403）。"""
+        self._enable_ai(self._json_draft())
+        self._login('owner', 'owner123456')
+        resp = self.client.get('/ai/draft')
+        self.assertEqual(resp.status_code, 403)
+
+    # --- 抽取 → 预填 ---
+
+    def test_draft_prefills_new_task_form(self):
+        """提交自由文本后，应同步生成并把结构化字段预填进建任务表单。"""
+        self._enable_ai(self._json_draft())
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/ai/draft',
+            data={'raw_text': '下周三前请王五牵头完成季度汇报材料，优先级高，'
+                              '涉及财务部与信息中心，风险是数据口径未对齐。'},
+            follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        html = self._html(self.client.get(resp.headers['Location'],
+                                          follow_redirects=True))
+        # 标题 / 优先级 / 截止日期 / 协同方 / 风险点 / 描述 均预填
+        self.assertIn('value="完成季度汇报材料"', html)
+        self.assertIn('high" selected', html)
+        self.assertIn('value="2026-09-20"', html)
+        self.assertIn('value="财务部、信息中心"', html)
+        self.assertIn('数据口径尚未对齐', html)
+        self.assertIn('王五牵头', html)
+        # 确认动作仍是既有建任务路由（AI 不另行建档）
+        self.assertIn('action="/tasks/new"', html)
+
+    # --- 确认建档 ---
+
+    def test_draft_confirm_creates_task(self):
+        """确认预填草稿应走 task.task_new 正常建档，create_task 不被 AI 改动。"""
+        self._enable_ai(self._json_draft())
+        self._login('admin', 'admin123456')
+        self.client.post(
+            '/ai/draft',
+            data={'raw_text': '下周三前请王五牵头完成季度汇报材料。'},
+            follow_redirects=True)
+
+        before = db.query_one("SELECT COUNT(*) AS c FROM tasks")['c']
+        resp = self.client.post(
+            '/tasks/new',
+            data={
+                'title': '完成季度汇报材料',
+                'description': '王五牵头，下周三前完成季度汇报材料。',
+                'priority': 'high',
+                'due_date': '2026-09-20',
+                'risk_note': '数据口径尚未对齐',
+                'collaborators': '财务部、信息中心',
+                'assignee': str(self.owner_id),
+            },
+            follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        after = db.query_one("SELECT COUNT(*) AS c FROM tasks")['c']
+        self.assertEqual(after, before + 1)
+
+        row = db.query_one(
+            "SELECT * FROM tasks WHERE title = '完成季度汇报材料' "
+            "ORDER BY task_id DESC LIMIT 1")
+        self.assertEqual(row['priority'], 'high')
+        self.assertEqual(row['due_date'], '2026-09-20')
+        self.assertEqual(row['assignee'], self.owner_id)
+
+    # --- 失败回退 ---
+
+    def test_draft_failure_falls_back(self):
+        """模型调用失败应回退为人工录入（错误进 description），绝不自动建档。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': False, 'text': None, 'error': '模型连接超时'}
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/ai/draft',
+            data={'raw_text': '任意文本'},
+            follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        html = self._html(self.client.get(resp.headers['Location'],
+                                          follow_redirects=True))
+        self.assertIn('生成失败', html)
+        self.assertIn('模型连接超时', html)
+        # 表单仍可提交（管理员手动补全），标题为空预填
+        self.assertIn('action="/tasks/new"', html)
+        self.assertIn('value=""', html)
+        # 失败不应留下任何任务
+        self.assertEqual(db.query_one("SELECT COUNT(*) AS c FROM tasks")['c'], 0)
+
+
 class TestStaticAssetVersion(unittest.TestCase):
     """静态资源缓存串（cache-busting）：防「改了样式忘了升版本号」回归。
 
@@ -3805,8 +3963,9 @@ if __name__ == '__main__':
     suite.addTests(loader.loadTestsFromTestCase(TestBehindProxy))
     # DEF-002：CSRF 防护
     suite.addTests(loader.loadTestsFromTestCase(TestCSRF))
-    # V5 AI 辅助生成（Phase 1 ②）
+    # V5 AI 辅助生成（Phase 1 ② + PR-2）
     suite.addTests(loader.loadTestsFromTestCase(TestAIDraftReminder))
+    suite.addTests(loader.loadTestsFromTestCase(TestAIStructuredTaskDraft))
 
     # 运行测试
     runner = unittest.TextTestRunner(verbosity=2)

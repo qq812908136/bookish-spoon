@@ -197,7 +197,7 @@ ai_service ──HTTP(stdlib http.client)──▶ 本地 Ollama / 云端模型 
 - 本地专属 17 项行为校验全过（默认关闭安全、脱敏、入队→生成→落库、熔断+密钥脱敏、熔断期暂停、人工确认闸）。
 - 全量测试 **161 项全过**（0 失败 0 错误）；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表写入 / 无报错）。
 
-### Phase 1 ② — 催办话术「页面内预填 + 可编辑 + 确认发出」（已完成，2026-09-03，待提交推送）
+### Phase 1 ② — 催办话术「页面内预填 + 可编辑 + 确认发出」（已完成，2026-09-03，已提交推送，远端 main = c05e306f7f）
 
 在 Phase 0 后端（触发 → 入队 → 生成 → 人工确认采纳）之上，把入口从「AI 控制台」下放到「任务详情页」，并支持生成后立即在页面内预填、可编辑、确认后才发出：
 
@@ -213,3 +213,19 @@ ai_service ──HTTP(stdlib http.client)──▶ 本地 Ollama / 云端模型 
 - 全量测试通过（含上述新增用例）；`AI_ENABLED=false` 时详情页不渲染 AI 卡片，零副作用。
 
 **下一步**：Phase 1 剩余 MVP —— 任务描述结构化抽取预填、督办简报 / 周报（仍仅管理员可用、仍须人工确认）。
+
+### Phase 1 PR-2 — 任务描述结构化抽取预填（已完成，2026-09-03，已提交推送）
+
+把 PR-2 从「自由文本」一键抽取为任务草稿字段，并**复用既有「新建任务」表单预填**，管理员核对后才点「创建任务」落库。AI 模块不碰 `create_task`（仅由 `task.task_new` 调用它），满足 SPEC 人工确认闸：
+
+- `src/ai_templates.py`：新增 `build_structured_task_prompt(text)`（要求模型输出 JSON：title/priority/due_date/risk_note/collaborators/description，明确不臆造负责人）+ `parse_structured_task(text)`（去 ```json 围栏、截取首个 `{...}`、容错解析、优先级归一化到 `high/medium/low/urgent`、`due_date` 校验 `YYYY-MM-DD`，失败回 `None` 由调用方退化）。
+- `src/routes/ai_routes.py`：新增 `GET/POST /ai/draft`（粘贴自由文本 → 同步生成）与 `GET /ai/draft/<log_id>`（展示结构化草稿）。`/ai/draft` 的 POST 复用 `ai_dispatcher.run_job_now()` 同步生成；`/ai/draft/<log_id>` **直接渲染 `tasks/form.html`** 并把抽取结果作为 `form_data` 预填——确认动作仍由 `task.task_new` 处理（仅调用 `create_task`，AI 不改动它）。生成失败 / 解析失败时退化为「把错误原文放进 description」的人工录入，仍由管理员补全后确认，**绝不自动建档**。
+- `src/templates/ai/draft_input.html`：新增粘贴入口页（textarea `raw_text` + CSRF，提交到 `/ai/draft`），含「仅预填草稿、需人工核对后再建档」提示。
+- 未新建 `ai/draft_task.html`：刻意复用 `tasks/form.html`，避免与既有建任务表单重复、保证将来表单改动能自动受益。
+
+**验证**：
+
+- 新增 `tests/test_suite.py::TestAIStructuredTaskDraft` 用例：管理员入口渲染（启用可见 / 未启用跳控制台 / owner 403）、提交后预填进建任务表单（标题/优先级选中/截止日/协同方/风险点/描述均预填、action 指向 `/tasks/new`）、确认后走 `task.task_new` 正常建档（字段与提交一致、`create_task` 未被 AI 改动）、生成失败回退人工录入（错误进 description、不自动建档）。
+- 全量测试通过（含上述新增用例）；`AI_ENABLED=false` 时 `/ai/draft` 跳回控制台、零副作用。
+
+**下一步**：Phase 1 剩余 MVP —— 督办简报 / 周报（PR-3），仍仅管理员可用、仍须人工确认。

@@ -7,9 +7,10 @@
 
 ⚠️ 提示词注入护栏：这里只做「基础脱敏」，不解析模型返回内容里的指令。
    模型返回内容在 ai_dispatcher 落库前不做二次执行，且必须经管理员人工确认
-   （adopt）才会作为站内信发出——这是 SPEC v1.0 明确的「人工确认闸」。
+   （adopt / 确认建任务）才会真正生效——这是 SPEC v1.0 明确的「人工确认闸」。
 """
 
+import json
 import re
 
 import config
@@ -79,3 +80,76 @@ def build_summary_prompt(task):
         f"任务说明：{masked_desc}\n"
         "要求：只输出摘要正文，不要解释、不要加引号、不要使用 Markdown。"
     )
+
+
+# PR-2：任务描述结构化抽取的目标字段与归一化映射
+_DRAFT_PRIORITY_MAP = {
+    '高': 'high', '中': 'medium', '低': 'low',
+    '紧急': 'urgent', '特急': 'urgent', '急': 'urgent',
+    'high': 'high', 'medium': 'medium', 'low': 'low', 'urgent': 'urgent',
+}
+
+
+def build_structured_task_prompt(text):
+    """任务描述结构化抽取（PR-2）：把一段自由文本整理成一则任务草稿的字段。
+
+    Args:
+        text: 用户粘贴的原始需求 / 会议纪要等自由文本
+    Returns:
+        str: 发送给本地模型的提示词（要求输出 JSON）
+    """
+    cleaned = (text or '').strip()
+    return (
+        "你是单位内部的督办助手。请把下面这段自由文本整理成一则督办任务的草稿，"
+        "提取关键字段并以 JSON 输出（不要输出 JSON 以外的任何解释或 Markdown 代码块标记）。\n"
+        "JSON 字段约定：\n"
+        "  title: 任务标题（必填，简洁，≤30 字）\n"
+        "  priority: 优先级，取值仅限 \"high\" / \"medium\" / \"low\"（高/中/低）\n"
+        "  due_date: 截止日期，格式 \"YYYY-MM-DD\"；无法推断则填空字符串\n"
+        "  risk_note: 风险点说明（≤100 字），没有则填空字符串\n"
+        "  collaborators: 协同方（≤100 字），没有则填空字符串\n"
+        "  description: 任务说明（整合原文要点，≤300 字）\n"
+        "注意：不要臆造负责人（assignee 由人工在系统里选择，不要出现在 JSON 里）。\n"
+        f"原始文本：\n{cleaned}\n"
+    )
+
+
+def parse_structured_task(text):
+    """解析模型返回的 JSON 草稿，归一化为表单字段 dict。
+
+    容错：支持 ```json 围栏、前后多余文字、以及非严格 JSON。
+    解析失败返回 None，由调用方退化为「原文放进 description」的人工录入。
+
+    Returns:
+        dict|None: {title, priority, due_date, risk_note, collaborators, description}
+    """
+    if not text:
+        return None
+    raw = text.strip()
+    # 去 ```json ... ``` 围栏
+    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+    raw = re.sub(r'\s*```$', '', raw.strip())
+    # 截取首个 {...} 块，容忍前后解释文字
+    m = re.search(r'\{.*\}', raw, re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    pri = str(data.get('priority', '') or '').strip().lower()
+    priority = _DRAFT_PRIORITY_MAP.get(pri, 'medium')
+    due = str(data.get('due_date', '') or '').strip()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', due):
+        due = ''
+    return {
+        'title': str(data.get('title', '') or '').strip(),
+        'priority': priority,
+        'due_date': due,
+        'risk_note': str(data.get('risk_note', '') or '').strip(),
+        'collaborators': str(data.get('collaborators', '') or '').strip(),
+        'description': str(data.get('description', '') or '').strip(),
+    }
