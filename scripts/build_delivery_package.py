@@ -344,7 +344,7 @@ README = """# 督办系统 — 交付包 {VER}（{DATE} 整理）
 
 ```
 督办系统-交付包-{VER}/
-├── 01_需求文档/        需求规格说明书、PRD 草稿
+├── 01_需求文档/        需求规格说明书、PRD 草稿、V4 邮件功能需求清单
 ├── 02_设计文档/        系统架构、接口、数据库、模块详细设计、V2 迭代设计
 ├── 03_开发代码/        Flask 源码（src/）+ 测试（tests/）+ 脚本（scripts/）+ 启动脚本
 ├── 04_测试/           测试用例、测试报告（HTML/Markdown）、缺陷清单、报告生成器
@@ -473,6 +473,18 @@ def main():
     print('[1/4] 复制文档与离线程序（基线 ' + base_name + '）...')
     for seg in ('01_需求文档', '02_设计文档'):
         copy_tree(os.path.join(base, seg), os.path.join(dst, seg), seg)
+
+    # 01/02 整段来自基线，而基线是 v3——基线上当然没有本期新增的需求文档。
+    # 凡是 docs/ 里属于本版本、且应该进评审材料的需求类文档，都要在这里
+    # 显式补进去，否则交付包里会少掉本版本最重要的那一份需求文件。
+    docs_src = os.path.join(PROJECT_DIR, 'docs')
+    REQ_DOCS = (
+        ('督办系统-V4邮件功能需求清单.md', '督办系统-V4邮件功能需求清单.md'),
+    )
+    for src_name, out_name in REQ_DOCS:
+        if copy_file(os.path.join(docs_src, src_name),
+                     os.path.join(dst, '01_需求文档', out_name)):
+            print(f'  [OK]   已同步 01_需求文档/{out_name}')
     # 04_测试：跳过基线里的过期带日期报告，只保留当日的
     copy_tree(os.path.join(base, '04_测试'), os.path.join(dst, '04_测试'),
               '04_测试', skip_stale_reports=True)
@@ -515,7 +527,6 @@ def main():
 
     # 质量物文档：04_测试 里的缺陷清单原本来自 v3 基线，永远不会更新 ——
     # 结果就是交付包里写着「DEF-001 未修复」，而代码早就修好了。这里一并同步。
-    docs_src = os.path.join(PROJECT_DIR, 'docs')
     for fn in ('缺陷清单-2026-08-31.md', '上线前待办.md'):
         if copy_file(os.path.join(docs_src, fn), os.path.join(rpt_dst, fn)):
             print(f'  [OK]   已同步 {fn}  <- docs/')
