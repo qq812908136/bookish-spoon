@@ -1492,44 +1492,52 @@ def mark_ai_jobs_sending(queue_ids):
 
 
 def mark_ai_job_done(queue_id, result_text, task_id, job_type):
-    """标记生成成功：写入历史表并从队列移除。"""
+    """标记生成成功：写入历史表并从队列移除。
+
+    Returns:
+        int|None: 新写入的 ai_log.log_id；队列行不存在时返回 None
+    """
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     row = db.query_one("SELECT * FROM ai_queue WHERE queue_id = ?", (queue_id,))
     if not row:
-        return
+        return None
     with db.transaction() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO ai_log "
             "(task_id, job_type, success, result_text, attempts, created_at, finished_at) "
             "VALUES (?, ?, 1, ?, 1, ?, ?)",
             (task_id, job_type, result_text, row['created_at'], now))
+        log_id = cur.lastrowid
         conn.execute("DELETE FROM ai_queue WHERE queue_id = ?", (queue_id,))
+    return log_id
 
 
 def mark_ai_job_failed(queue_id, error_message, retry_max=3, backoff=None):
     """标记生成失败：可重试排到下次，超过 retry_max 则归档到历史表。
 
     Returns:
-        str: 'retrying' / 'failed'
+        tuple: (status: 'retrying'|'failed', log_id: int|None)
+               —— log_id 仅当本次归档（失败终态）时存在，重试中返回 None。
     """
     backoff = backoff or [1, 5, 15]
     now_dt = datetime.now()
     now = now_dt.strftime('%Y-%m-%d %H:%M:%S')
     row = db.query_one("SELECT * FROM ai_queue WHERE queue_id = ?", (queue_id,))
     if not row:
-        return 'failed'
+        return 'failed', None
 
     retry_count = int(row['retry_count'] or 0) + 1
     if retry_count > retry_max:
         with db.transaction() as conn:
-            conn.execute(
+            cur = conn.execute(
                 "INSERT INTO ai_log "
                 "(task_id, job_type, success, error_message, attempts, created_at, finished_at) "
                 "VALUES (?, ?, 0, ?, ?, ?, ?)",
                 (row['task_id'], row['job_type'], error_message, retry_count,
                  row['created_at'], now))
+            log_id = cur.lastrowid
             conn.execute("DELETE FROM ai_queue WHERE queue_id = ?", (queue_id,))
-        return 'failed'
+        return 'failed', log_id
 
     idx = min(retry_count - 1, len(backoff) - 1)
     next_at = (now_dt + timedelta(minutes=backoff[idx])).strftime('%Y-%m-%d %H:%M:%S')
@@ -1537,7 +1545,12 @@ def mark_ai_job_failed(queue_id, error_message, retry_max=3, backoff=None):
         "UPDATE ai_queue SET status = 'pending', retry_count = ?, "
         "next_attempt_at = ?, last_error = ? WHERE queue_id = ?",
         (retry_count, next_at, error_message, queue_id))
-    return 'retrying'
+    return 'retrying', None
+
+
+def fetch_ai_job(queue_id):
+    """读取单条 ai_queue（按 queue_id）。"""
+    return db.query_one("SELECT * FROM ai_queue WHERE queue_id = ?", (queue_id,))
 
 
 def reset_stuck_ai_jobs():

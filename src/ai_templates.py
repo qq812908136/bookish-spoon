@@ -43,15 +43,15 @@ def build_reminder_prompt(task, owner_name='负责人'):
     """催办话术（PR-1 首选场景）。
 
     Args:
-        task: tasks 行 dict（含 title / due_date / status / description 等）
+        task: tasks 行（sqlite3.Row 或 dict，统一按下标访问）
         owner_name: 负责人显示名（当前未直接用到，保留扩展位）
     Returns:
         str: 发送给本地模型的提示词
     """
-    title = task.get('title', '')
-    due = task.get('due_date', '')
-    status = task.get('status', '')
-    desc = task.get('description') or ''
+    title = task['title'] or ''
+    due = task['due_date'] or ''
+    status = task['status'] or ''
+    desc = task['description'] or ''
     masked_desc = _mask_if_needed(desc)
     return (
         "你是单位内部的督办助手。请用正式、简洁、得体的中文，"
@@ -66,10 +66,10 @@ def build_reminder_prompt(task, owner_name='负责人'):
 
 def build_summary_prompt(task):
     """任务综述（PR-2）：把任务信息浓缩成一段可归档的摘要。"""
-    title = task.get('title', '')
-    due = task.get('due_date', '')
-    status = task.get('status', '')
-    desc = task.get('description') or ''
+    title = task['title'] or ''
+    due = task['due_date'] or ''
+    status = task['status'] or ''
+    desc = task['description'] or ''
     masked_desc = _mask_if_needed(desc)
     return (
         "请用 2-3 句话客观概括以下督办任务，语气中立、可用于归档。\n"

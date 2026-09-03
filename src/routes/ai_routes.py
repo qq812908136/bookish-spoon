@@ -55,10 +55,17 @@ def console():
 @ai_bp.route('/ai/trigger', methods=['POST'])
 @admin_required
 def trigger():
-    """为某任务入队「催办话术」生成任务。"""
+    """为某任务入队「催办话术」生成任务。
+
+    source=detail 时（任务详情页入口）同步生成并立即跳回详情页预填，
+    免去等待 5 分钟扫描周期；其余来源仍只入队、由后台扫描处理。
+    """
     if not config.AI_ENABLED:
         flash('AI 功能未启用，无法生成。请在 .env 中设置 AI_ENABLED=true 并配置本地模型。',
               'warning')
+        task_id_arg = request.form.get('task_id', type=int)
+        if request.form.get('source') == 'detail' and task_id_arg:
+            return redirect(url_for('task.task_detail', task_id=task_id_arg))
         return redirect(url_for('ai.console'))
 
     task_id = request.form.get('task_id', type=int)
@@ -72,7 +79,19 @@ def trigger():
         return redirect(url_for('ai.console'))
 
     prompt = ai_templates.build_reminder_prompt(task)
-    ai_dispatcher.enqueue_ai_job(task_id, 'draft_reminder', prompt)
+    queue_id = ai_dispatcher.enqueue_ai_job(task_id, 'draft_reminder', prompt)
+    if not queue_id:
+        flash('入队失败，请稍后重试。', 'danger')
+        if request.form.get('source') == 'detail':
+            return redirect(url_for('task.task_detail', task_id=task_id))
+        return redirect(url_for('ai.console'))
+
+    # 详情页入口：同步生成，立即回到详情页预填
+    if request.form.get('source') == 'detail':
+        log_id = ai_dispatcher.run_job_now(queue_id)
+        return redirect(url_for('task.task_detail',
+                               task_id=task_id, ai_log_id=log_id or ''))
+
     flash(f'已为任务 #{task_id} 入队「催办话术」生成任务，将在下次扫描时处理。', 'success')
     return redirect(url_for('ai.console'))
 
@@ -100,6 +119,10 @@ def adopt(log_id):
 
     这是 AI 输出唯一对外生效的出口——必须由管理员显式点击，
     绝不由调度器自动发出（SPEC v1.0 人工确认闸）。
+
+    Phase 1 ②：支持管理员在页面内编辑后的内容（content 字段）覆盖原稿，
+    真正发出的是「人改过的版本」，而非模型原话——仍属人工确认范畴。
+    next=detail 时确认后跳回任务详情页。
     """
     log = models.get_ai_log(log_id)
     if not log or not log['success']:
@@ -108,6 +131,20 @@ def adopt(log_id):
     if log['adopted']:
         flash('该结果已被采纳过。', 'info')
         return redirect(url_for('ai.console'))
+
+    # 页面内可编辑：以人工修改后的内容为准。
+    # content 字段缺省（控制台采纳、无编辑框）→ 用原稿；
+    # content 字段存在但为空（用户在详情页清空文本框）→ 拒绝发送，不回落原稿。
+    raw = request.form.get('content')
+    if raw is None:
+        content = log['result_text'] or ''
+    else:
+        content = raw.strip()
+    if not content:
+        flash('催办内容为空，无法发送。', 'danger')
+        if request.form.get('next') == 'detail' and log['task_id']:
+            return redirect(url_for('task.task_detail', task_id=log['task_id']))
+        return redirect(url_for('ai.result', log_id=log_id))
 
     task = (db.query_one("SELECT assignee FROM tasks WHERE task_id = ?",
                           (log['task_id'],)) if log['task_id'] else None)
@@ -121,9 +158,12 @@ def adopt(log_id):
         recipient=task['assignee'],
         sender=admin['user_id'],
         msg_type='ai_reminder',
-        content=(log['result_text'] or ''),
+        content=content[:2000],
         task_id=log['task_id'],
     )
     models.mark_ai_log_adopted(log_id)
     flash('已作为站内信发送给任务负责人，等待其确认。', 'success')
+
+    if request.form.get('next') == 'detail' and log['task_id']:
+        return redirect(url_for('task.task_detail', task_id=log['task_id']))
     return redirect(url_for('ai.result', log_id=log_id))

@@ -181,7 +181,7 @@ ai_service ──HTTP(stdlib http.client)──▶ 本地 Ollama / 云端模型 
 
 ## 实施进度（追加记录，不影响已锁定内容）
 
-### Phase 0 — 已完成（2026-09-03，代码落地，待提交推送）
+### Phase 0 — 已完成（2026-09-03，已提交推送）
 
 基础设施骨架全部落地，严格镜像 V4 邮件子系统模式：
 
@@ -197,4 +197,19 @@ ai_service ──HTTP(stdlib http.client)──▶ 本地 Ollama / 云端模型 
 - 本地专属 17 项行为校验全过（默认关闭安全、脱敏、入队→生成→落库、熔断+密钥脱敏、熔断期暂停、人工确认闸）。
 - 全量测试 **161 项全过**（0 失败 0 错误）；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表写入 / 无报错）。
 
-**下一步**：进入 Phase 1 MVP（催办话术预填确认发出、任务描述结构化抽取预填、督办简报/周报），仍仅管理员可用、仍须人工确认。
+### Phase 1 ② — 催办话术「页面内预填 + 可编辑 + 确认发出」（已完成，2026-09-03，待提交推送）
+
+在 Phase 0 后端（触发 → 入队 → 生成 → 人工确认采纳）之上，把入口从「AI 控制台」下放到「任务详情页」，并支持生成后立即在页面内预填、可编辑、确认后才发出：
+
+- `src/routes/ai_routes.py`：`/ai/trigger` 新增 `source=detail` 分支——详情页入口**同步生成并立即跳回详情页预填**，免去等 5 分钟扫描；`/ai/adopt` 支持接收 `content` 字段（页面内编辑后的内容）覆盖原稿，并支持 `next=detail` 确认后跳回详情页。空内容拒绝采纳，不发出空站内信。
+- `src/ai_dispatcher.py`：新增 `run_job_now(queue_id)`——同步运行刚入队的单条任务并落 `ai_log`（失败以 `retry_max=0` 直接归档，方便页面回显错误），复用 `_run_one` 保证调模型/落库逻辑只在一处。
+- `src/models.py`：`mark_ai_job_done` / `mark_ai_job_failed` 改为返回 `ai_log.log_id`；新增 `fetch_ai_job(queue_id)`。
+- `src/routes/task_routes.py`：`task_detail` 读取 `?ai_log_id=` 并注入 `ai_enabled` / `can_use_ai` / `ai_log`。
+- `src/templates/tasks/detail.html`：新增「AI 催办话术」卡片（管理员 + 已启用 AI 可见），三态：未生成→「生成催办话术」；已生成→可编辑文本框 + 「确认发送给负责人」；失败→回显错误 + 「重新生成」。所有 POST 表单均带 CSRF 令牌。
+
+**验证**：
+
+- 新增 `tests/test_suite.py::TestAIDraftReminder` 用例：入口渲染权限（管理员可见 / owner 不可见 / 未启用不可见）、生成后预填可编辑文本域、确认采纳把（编辑后）内容作为站内信发出、空内容拒绝、生成失败回显错误并可重生成。
+- 全量测试通过（含上述新增用例）；`AI_ENABLED=false` 时详情页不渲染 AI 卡片，零副作用。
+
+**下一步**：Phase 1 剩余 MVP —— 任务描述结构化抽取预填、督办简报 / 周报（仍仅管理员可用、仍须人工确认）。

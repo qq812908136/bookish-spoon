@@ -59,6 +59,8 @@ import csrf
 import crypto_util
 import state_machine
 import mail_constants
+import ai_service
+import ai_dispatcher
 from state_machine import (
     TaskStatus, STATUS_LABELS, TRANSITIONS, ADMIN_ONLY_TRANSITIONS,
     validate_transition, get_allowed_transitions, change_task_status,
@@ -3545,6 +3547,148 @@ class TestManualMailSend(unittest.TestCase):
         self.assertIn('disabled', html)
 
 
+class TestAIDraftReminder(unittest.TestCase):
+    """V5 Phase 1 ②：催办话术「页面内预填 + 可编辑 + 确认发出」。
+
+    覆盖：入口渲染权限（管理员 + 已启用 AI）、owner 不可见、生成后页面内
+    可编辑预填、确认采纳把（可编辑后的）内容作为站内信发出、生成失败回显。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app()
+        cls.app.config['TESTING'] = True
+
+    def setUp(self):
+        reset_database()
+        # 清掉 AI 队列/历史，避免跨用例残留
+        conn = db.get_db()
+        conn.execute('DELETE FROM ai_queue')
+        conn.execute('DELETE FROM ai_log')
+        conn.commit()
+        self.client = make_client(self.app)
+        self._orig_ai = config.AI_ENABLED
+        self._orig_call = ai_service.call_model
+        self.admin_id = create_test_user('admin', '管理员',
+                                         password='admin123456', role='admin')
+        self.creator_id = create_test_user('creator', '布置人',
+                                           password='creator123456', role='owner')
+        self.owner_id = create_test_user('owner', '张三',
+                                         password='owner123456', role='owner')
+        self.task_id = create_task_direct('待催办任务', self.creator_id, self.owner_id)
+
+    def tearDown(self):
+        # 还原 AI 开关与模型调用，避免污染其它用例
+        config.AI_ENABLED = self._orig_ai
+        ai_service.call_model = self._orig_call
+
+    def _login(self, username, password):
+        return self.client.post(
+            '/login', data={'username': username, 'password': password},
+            follow_redirects=False)
+
+    def _html(self, resp):
+        return resp.data.decode('utf-8')
+
+    def _enable_ai(self, text='请尽快推进任务X的进展，本周内反馈'):
+        """开启 AI 并把模型调用替换成可控的假响应。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': True, 'text': text, 'error': None}
+
+    # --- 入口渲染权限 ---
+
+    def test_admin_sees_ai_block_when_enabled(self):
+        """AI 启用且为管理员时，详情页应出现「AI 催办话术」入口。"""
+        self._enable_ai()
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/tasks/%d' % self.task_id))
+        self.assertIn('AI 催办话术', html)
+        self.assertIn('生成催办话术', html)
+
+    def test_ai_block_hidden_when_disabled(self):
+        """AI 未启用时，即使是管理员也不应看到入口。"""
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/tasks/%d' % self.task_id))
+        self.assertNotIn('AI 催办话术', html)
+
+    def test_owner_does_not_see_ai_block(self):
+        """AI 仅管理员可用，负责人（owner）看不到入口。"""
+        self._enable_ai()
+        self._login('owner', 'owner123456')
+        html = self._html(self.client.get('/tasks/%d' % self.task_id))
+        self.assertNotIn('AI 催办话术', html)
+
+    # --- 生成 → 预填 → 确认发出 ---
+
+    def test_generate_prefills_editable_textarea(self):
+        """点击生成后应同步生成并在详情页预填可编辑文本域。"""
+        self._enable_ai(text='请于周五前反馈任务进展')
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/ai/trigger',
+            data={'task_id': self.task_id, 'source': 'detail'},
+            follow_redirects=True)
+        html = self._html(resp)
+        self.assertIn('请于周五前反馈任务进展', html)
+        self.assertIn('确认发送给负责人', html)
+        # 内容落在可编辑的 textarea（name=content）里
+        self.assertIn('name="content"', html)
+
+    def test_adopt_sends_edited_content_as_message(self):
+        """确认采纳应把（可编辑后的）内容作为站内信发给负责人。"""
+        self._enable_ai(text='原稿提醒内容')
+        self._login('admin', 'admin123456')
+        self.client.post(
+            '/ai/trigger',
+            data={'task_id': self.task_id, 'source': 'detail'},
+            follow_redirects=True)
+        log = models.list_ai_logs(1)[0]
+        self.assertTrue(log['success'])
+
+        edited = '人工修改后的催办话术'
+        self.client.post('/ai/adopt/%d' % log['log_id'],
+                         data={'content': edited, 'next': 'detail'},
+                         follow_redirects=True)
+
+        # 负责人应收到一条 ai_reminder 站内信，内容为修改后的版本
+        msgs = models.get_messages(self.owner_id)
+        self.assertTrue(any(m['type'] == 'ai_reminder'
+                            and m['content'] == edited for m in msgs))
+        self.assertTrue(models.get_ai_log(log['log_id'])['adopted'])
+
+    def test_adopt_rejects_empty_content(self):
+        """内容被清空时确认应被拒，不发出空站内信。"""
+        self._enable_ai(text='原稿')
+        self._login('admin', 'admin123456')
+        self.client.post(
+            '/ai/trigger',
+            data={'task_id': self.task_id, 'source': 'detail'},
+            follow_redirects=True)
+        log = models.list_ai_logs(1)[0]
+        self.client.post('/ai/adopt/%d' % log['log_id'],
+                         data={'content': '   ', 'next': 'detail'},
+                         follow_redirects=True)
+        msgs = models.get_messages(self.owner_id)
+        self.assertFalse(any(m['type'] == 'ai_reminder' for m in msgs))
+        self.assertFalse(models.get_ai_log(log['log_id'])['adopted'])
+
+    def test_generate_failure_shows_error(self):
+        """模型调用失败应在详情页回显错误，并可重新生成。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': False, 'text': None, 'error': '连接本地模型超时'}
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/ai/trigger',
+            data={'task_id': self.task_id, 'source': 'detail'},
+            follow_redirects=True)
+        html = self._html(resp)
+        self.assertIn('本次生成失败', html)
+        self.assertIn('连接本地模型超时', html)
+        self.assertIn('重新生成', html)
+
+
 class TestStaticAssetVersion(unittest.TestCase):
     """静态资源缓存串（cache-busting）：防「改了样式忘了升版本号」回归。
 
@@ -3661,6 +3805,8 @@ if __name__ == '__main__':
     suite.addTests(loader.loadTestsFromTestCase(TestBehindProxy))
     # DEF-002：CSRF 防护
     suite.addTests(loader.loadTestsFromTestCase(TestCSRF))
+    # V5 AI 辅助生成（Phase 1 ②）
+    suite.addTests(loader.loadTestsFromTestCase(TestAIDraftReminder))
 
     # 运行测试
     runner = unittest.TextTestRunner(verbosity=2)

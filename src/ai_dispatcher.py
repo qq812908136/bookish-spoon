@@ -54,15 +54,42 @@ def scan_and_run():
         _run_one(job)
 
 
-def _run_one(job):
+def _run_one(job, retry_max=None):
+    """处理单条任务：调模型 → 落结果。返回 (log_id, success)。
+
+    retry_max 缺省走 config.AI_RETRY_MAX；同步「立即生成」场景传入 0，
+    让失败直接归档而非进重试队列（用户正等着结果，重试没有意义）。
+    """
     queue_id = job['queue_id']
     result = ai_service.call_model(job['prompt'])
     if result['success']:
-        models.mark_ai_job_done(queue_id, result['text'],
-                                job['task_id'], job['job_type'])
+        log_id = models.mark_ai_job_done(queue_id, result['text'],
+                                         job['task_id'], job['job_type']) or 0
         models.reset_ai_fail_streak()
+        return log_id, True
     else:
-        _handle_failure(queue_id, result.get('error') or '未知错误')
+        _, log_id = models.mark_ai_job_failed(
+            queue_id, result.get('error') or '未知错误',
+            retry_max=(retry_max if retry_max is not None else config.AI_RETRY_MAX),
+            backoff=_parse_backoff(config.AI_RETRY_BACKOFF))
+        return log_id or 0, False
+
+
+def run_job_now(queue_id):
+    """同步运行一条刚入队的 AI 任务，返回生成结果的 ai_log.log_id。
+
+    用于任务详情页「立即生成」场景：免去等待 5 分钟扫描周期，
+    且失败也会落一条失败日志（retry_max=0 直接归档），方便页面回显错误。
+    复用 _run_one，保证调模型/落库逻辑只在一处。
+    """
+    if not config.AI_ENABLED:
+        return 0
+    job = models.fetch_ai_job(queue_id)
+    if not job:
+        return 0
+    models.mark_ai_jobs_sending([queue_id])
+    log_id, _ok = _run_one(job, retry_max=0)
+    return log_id
 
 
 def _handle_failure(queue_id, error):

@@ -8,30 +8,31 @@
 
 ---
 
-## [未发布] V5（进行中）— AI 辅助生成（Phase 0 骨架）
+## [未发布] V5（进行中）— AI 辅助生成（Phase 0 骨架 + Phase 1 ② 试点）
 
-在 V4 邮件管道成熟模式上，新增一路**旁路 AI 辅助生成**通道，默认关闭、零出域、纯草稿/预填定位。Phase 0 打通技术管道，不做业务发散。
+在 V4 邮件管道成熟模式上，新增一路**旁路 AI 辅助生成**通道，默认关闭、零出域、纯草稿/预填定位。Phase 0 打通技术管道，Phase 1 ② 把催办话术入口下放到任务详情页并支持页面内预填/编辑/确认发出。
 
 ### 功能
 
 - **默认关闭**：`AI_ENABLED` 默认 `false`。**不配置 = 不调用任何模型、不发任何请求**，行为与 V4 完全一致。
 - **本地优先（零出域）**：默认 `AI_PROVIDER=local` 走本机 Ollama（`http://127.0.0.1:11434`），数据不出内网；`cloud` 模式预留 OpenAI 兼容接口（密钥仅来自环境变量，不入代码默认值）。
 - **管理员控制台**（`/ai`）：开关与配置概览、近期生成记录、为任务一键入队「催办话术」生成。
-- **人工确认闸**：AI 输出只展示，必须经管理员点「采纳」才作为站内信发出——绝不自动落库 / 自动发消息（对应 SPEC Q5 锁定）。
+- **任务详情页 AI 催办话术卡片（Phase 1 ②）**：管理员在任务详情页点「生成催办话术」即**同步生成并页面内预填**到可编辑文本框，修改后点「确认发送给负责人」才作为站内信发出；生成失败回显错误并可重新生成。**未启用 AI 或非管理员均看不到入口。**
+- **人工确认闸**：AI 输出只展示/预填，必须经管理员点「确认」才作为站内信发出——绝不自动落库 / 自动发消息（对应 SPEC Q5 锁定）。确认时以**人编辑后的内容**为准，仍属人工确认范畴。
 - **脱敏**：送模型前按 `AI_MASK_DATA`（默认开）遮蔽手机号 / 邮箱 / 证件号。
 - **熔断**：连续失败超阈值暂停并自动试探恢复；错误日志不含 API Key。
 
-#### 技术说明（AI 功能，Phase 0）
+#### 技术说明（AI 功能）
 
-- 新增模块：`ai_templates.py`、`ai_service.py`、`ai_dispatcher.py`、`routes/ai_routes.py`；模板 `templates/ai/settings.html`、`templates/ai/result.html`。
+- 新增模块：`ai_templates.py`、`ai_service.py`、`ai_dispatcher.py`、`routes/ai_routes.py`；模板 `templates/ai/settings.html`、`templates/ai/result.html`；详情页 `templates/tasks/detail.html` 新增 AI 卡片。
 - 数据库幂等迁移 `_migrate_v4()`：新建 `ai_queue`（生成任务队列）/ `ai_log`（生成历史）两表。**老库直接升级即可，不需重新初始化。**
-- AI 任务先落库进队列，由**已有的**每 5 分钟逾期扫描循环顺带执行（`scheduler._overdue_scan_loop` 内 `ai_dispatcher.scan_and_run()`），**不新增线程**。
+- AI 任务先落库进队列，由**已有的**每 5 分钟逾期扫描循环顺带执行（`scheduler._overdue_scan_loop` 内 `ai_dispatcher.scan_and_run()`），**不新增线程**；详情页「立即生成」走 `ai_dispatcher.run_job_now()` 同步单次运行（复用同一 `_run_one`，失败直接归档方便回显）。
 - 刻意不改 `models.create_message()`——AI 仅调用它（采纳时发站内信），不改动既有站内信逻辑。
 - 零新增第三方依赖：`ai_service` 用标准库 `urllib` 发 HTTP，避免重打包 exe。
 
 ### 验证
 
-- 全量测试 161 项全部通过（0 失败 0 错误）；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表写入 / 无报错）。
+- 全量测试通过（含 `TestAIDraftReminder` 新增用例：入口渲染权限、生成后预填可编辑、确认采纳发站内信、空内容拒绝、失败回显）；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表写入 / 无渲染 / 无报错）。
 
 ---
 
