@@ -31,6 +31,7 @@
 - `docs/` 唯一真相源；交付包 `01_需求文档/`、`02_设计文档/` 是副本**禁止手改**。入口 `docs/README.md`。
 - 英文短名文档（`architecture-design.md` 等）被多处引用**保留不动**；新增一律中文长名。
 - 两份「架构」互补不可合并：`architecture-design.md`（代码级手册，改代码前查它）vs `督办系统-系统架构设计.md`（架构决策，理解全貌看它）。
+- **两份架构文档已各含一章 V4 邮件**（2026-09-03）：手册第十三章（Schema/配置/队列流转/熔断/挂钩点/路由/排障）+ 决策文档第 9 章（六项选型权衡）。视角不同不重复。
 - `CHANGELOG.md` 在**仓库根**；只记用户可见变更，内部过程放 `docs/迭代记录/`。
 
 ## 配置与日志
@@ -44,7 +45,8 @@
 - `python scripts/build_delivery_package.py vN`（默认 v4）。从 v3 只读复制 01/02/04/05 → 由当前源码实时装配 03_开发代码 → 用 `docs/测试报告/` 覆盖 04_测试 → 写 README → 打 zip。
 - 安全闸门 `REBUILDABLE={'v4'..'v9','test'}`，v1/v2/v3 拒绝重建。key 须与白名单同格式。
 - **三条硬规则**：① `05_离线程序/**/data/supervision.db` 是刻意内置的演示数据，过滤规则必须放行；② 重建前**必须先 `build.bat` 打包就位 `dist/督办系统/`**，否则退回 v3 旧 exe；③ `RENAME_MAP` 去「-最新」后缀，只作用于新版本。`dist/` 若为空先从 `_archive/dist/督办系统` `cp -a` 拷回。
-- v3 已发行只读；**v4 当前版本**：259 文件 / zip 259 条目 13.8MB。复核：zip 条目数 + `testzip()` + bat 抽查 GBK/CRLF + 扫 `.db` 垃圾 + `git status`。
+- v3 已发行只读；**v4 当前版本**：260 文件 / zip 260 条目 13.8MB。复核：zip 条目数 + `testzip()` + bat 抽查 GBK/CRLF + 扫 `.db` 垃圾 + `git status`。
+- **⚠️ 01/02 是「基线复制 + 本版本补差」，不是全量同步** —— 在 `docs/` 里新增或改了需求类/设计类文档，**必须去 `build_delivery_package.py` 登记**：需求类进 `REQ_DOCS`（`[1/4]` 段），设计类进 `DESIGN_DOCS`（**必须排在 `apply_renames()` 之后**，因为仓库用英文短名 `architecture-design.md`、包内用中文长名 `督办系统-架构设计.md`，写早了按旧名落盘会被改名逻辑漏掉）。已踩两次（V4 需求清单、两份架构文档）。
 - **归档用 `mv` 到 `_archive/`，不要用删除**：旧交付包目录 / 旧 dist / 旧 zip 一律改名为 `_prev-xxx` 再 `mv` 进 `_archive/`，零删除操作。
 - 交付包 README 的测试数**从 `docs/测试报告/test_summary.json` 真读**，不写死（写死的数字每加用例就腐一次，而 README 是最容易忘同步的地方）。
 - `04_测试` 从 v3 基线整段复制会**每重建一次多留一代带日期的旧报告**；`make_ignore(skip_stale_reports=True)` 在复制时过滤非当日报告（比复制完再删少一次批量删除）。
