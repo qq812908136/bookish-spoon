@@ -16,6 +16,7 @@ MAIL_TYPE_ASSIGN = 'assign'                # 任务分配 / 改派通知
 MAIL_TYPE_DAILY_REPORT = 'daily_report'    # 管理员日报
 MAIL_TYPE_MANUAL = 'manual'                # 手动发送（任务详情页按钮）
 MAIL_TYPE_TEST = 'test'                    # 设置页测试邮件
+MAIL_TYPE_AI_BRIEF = 'ai_brief'            # AI 督办简报 / 周报（PR-3）
 
 MAIL_TYPE_LABELS = {
     MAIL_TYPE_OVERDUE:      '逾期提醒',
@@ -25,6 +26,7 @@ MAIL_TYPE_LABELS = {
     MAIL_TYPE_DAILY_REPORT: '管理员日报',
     MAIL_TYPE_MANUAL:       '手动提醒',
     MAIL_TYPE_TEST:         '测试邮件',
+    MAIL_TYPE_AI_BRIEF:     'AI 督办简报',
 }
 
 # ============================================================

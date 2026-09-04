@@ -221,6 +221,12 @@ def task_detail(task_id):
     # 获取启用的用户列表（负责人下拉，仅管理员可改负责人）
     active_users = models.get_all_active_users()
 
+    # V5 Phase 1 ②：详情页 AI 催办话术入口上下文
+    ai_enabled = bool(config.AI_ENABLED)
+    can_use_ai = user['role'] == 'admin' and ai_enabled
+    ai_log_id = request.args.get('ai_log_id', type=int)
+    ai_log = models.get_ai_log(ai_log_id) if ai_log_id else None
+
     return render_template(
         'tasks/detail.html',
         task=task,
@@ -239,6 +245,9 @@ def task_detail(task_id):
         current_user=user,
         can_edit=can_edit_task(task, user),
         can_delete=can_delete_task(task, user),
+        ai_enabled=ai_enabled,
+        can_use_ai=can_use_ai,
+        ai_log=ai_log,
         **_mail_button_context(task, user),
     )
 

@@ -28,6 +28,7 @@ MESSAGE_TYPE_LABELS = {
     'warning_overdue':    '逾期预警',
     'warning_inactive':   '待激活预警',
     'admin_directive':    '管理员指令',
+    'ai_brief':          'AI 简报',
 }
 
 # 消息类型颜色映射
@@ -38,6 +39,7 @@ MESSAGE_TYPE_COLORS = {
     'warning_overdue':    'red',
     'warning_inactive':   'yellow',
     'admin_directive':    'purple',
+    'ai_brief':           'purple',
 }
 
 

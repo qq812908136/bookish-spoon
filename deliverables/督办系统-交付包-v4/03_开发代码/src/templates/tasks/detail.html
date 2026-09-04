@@ -319,6 +319,54 @@
 {% endif %}
 
 {# ============================================================ #}
+{# AI 催办话术（V5，Phase 1 ②：管理员 + 已启用 AI） #}
+{# 生成→页面内预填→可编辑→人工确认发出（绝不自动发出） #}
+{# ============================================================ #}
+{% if can_use_ai %}
+<div class="card" style="margin-bottom:16px;">
+    <div class="panel-section-title">{{ icon('zap', 14) }} AI 催办话术</div>
+    {% if ai_log and ai_log.success %}
+    {# 已生成：可编辑预填 + 确认发出 #}
+    <p class="text-muted" style="font-size:12px;">AI 已生成催办草稿，可修改后由你确认发送给负责人（不会自动发出）。</p>
+    <form action="{{ url_for('ai.adopt', log_id=ai_log.log_id) }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="detail">
+        <div class="form-group">
+            <label>催办内容（可编辑，≤2000 字）</label>
+            <textarea name="content" class="form-control" rows="4" maxlength="2000"
+                      style="white-space:pre-wrap;">{{ ai_log.result_text or '' }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">{{ icon('send', 14) }} 确认发送给负责人</button>
+        <a href="{{ url_for('task.task_detail', task_id=task['task_id']) }}"
+           class="btn btn-secondary btn-sm" style="margin-left:8px;">取消</a>
+    </form>
+    {% elif ai_log and not ai_log.success %}
+    {# 生成失败：展示错误 + 重新生成 #}
+    <p class="text-danger" style="font-size:12px;">
+        本次生成失败：{{ ai_log.error_message or '未知错误' }}
+    </p>
+    <form action="{{ url_for('ai.trigger') }}" method="POST" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="task_id" value="{{ task['task_id'] }}">
+        <input type="hidden" name="source" value="detail">
+        <button type="submit" class="btn btn-secondary btn-sm">{{ icon('zap', 14) }} 重新生成</button>
+    </form>
+    {% else %}
+    {# 未生成：提供入口 #}
+    <p class="text-muted" style="font-size:12px;">
+        由本地模型（Ollama）生成一条催办提醒草稿，可编辑后人工确认发出。
+    </p>
+    <form action="{{ url_for('ai.trigger') }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="task_id" value="{{ task['task_id'] }}">
+        <input type="hidden" name="source" value="detail">
+        <button type="submit" class="btn btn-primary btn-sm">{{ icon('zap', 14) }} 生成催办话术</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+
+{# ============================================================ #}
 {# 危险操作（仅管理员，仅已撤销任务） #}
 {# ============================================================ #}
 {% if can_delete %}

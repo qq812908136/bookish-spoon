@@ -59,6 +59,8 @@ import csrf
 import crypto_util
 import state_machine
 import mail_constants
+import ai_service
+import ai_dispatcher
 from state_machine import (
     TaskStatus, STATUS_LABELS, TRANSITIONS, ADMIN_ONLY_TRANSITIONS,
     validate_transition, get_allowed_transitions, change_task_status,
@@ -3545,6 +3547,467 @@ class TestManualMailSend(unittest.TestCase):
         self.assertIn('disabled', html)
 
 
+class TestAIDraftReminder(unittest.TestCase):
+    """V5 Phase 1 ②：催办话术「页面内预填 + 可编辑 + 确认发出」。
+
+    覆盖：入口渲染权限（管理员 + 已启用 AI）、owner 不可见、生成后页面内
+    可编辑预填、确认采纳把（可编辑后的）内容作为站内信发出、生成失败回显。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app()
+        cls.app.config['TESTING'] = True
+
+    def setUp(self):
+        reset_database()
+        # 清掉 AI 队列/历史，避免跨用例残留
+        conn = db.get_db()
+        conn.execute('DELETE FROM ai_queue')
+        conn.execute('DELETE FROM ai_log')
+        conn.commit()
+        self.client = make_client(self.app)
+        self._orig_ai = config.AI_ENABLED
+        self._orig_call = ai_service.call_model
+        self.admin_id = create_test_user('admin', '管理员',
+                                         password='admin123456', role='admin')
+        self.creator_id = create_test_user('creator', '布置人',
+                                           password='creator123456', role='owner')
+        self.owner_id = create_test_user('owner', '张三',
+                                         password='owner123456', role='owner')
+        self.task_id = create_task_direct('待催办任务', self.creator_id, self.owner_id)
+
+    def tearDown(self):
+        # 还原 AI 开关与模型调用，避免污染其它用例
+        config.AI_ENABLED = self._orig_ai
+        ai_service.call_model = self._orig_call
+
+    def _login(self, username, password):
+        return self.client.post(
+            '/login', data={'username': username, 'password': password},
+            follow_redirects=False)
+
+    def _html(self, resp):
+        return resp.data.decode('utf-8')
+
+    def _enable_ai(self, text='请尽快推进任务X的进展，本周内反馈'):
+        """开启 AI 并把模型调用替换成可控的假响应。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': True, 'text': text, 'error': None}
+
+    # --- 入口渲染权限 ---
+
+    def test_admin_sees_ai_block_when_enabled(self):
+        """AI 启用且为管理员时，详情页应出现「AI 催办话术」入口。"""
+        self._enable_ai()
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/tasks/%d' % self.task_id))
+        self.assertIn('AI 催办话术', html)
+        self.assertIn('生成催办话术', html)
+
+    def test_ai_block_hidden_when_disabled(self):
+        """AI 未启用时，即使是管理员也不应看到入口。"""
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/tasks/%d' % self.task_id))
+        self.assertNotIn('AI 催办话术', html)
+
+    def test_owner_does_not_see_ai_block(self):
+        """AI 仅管理员可用，负责人（owner）看不到入口。"""
+        self._enable_ai()
+        self._login('owner', 'owner123456')
+        html = self._html(self.client.get('/tasks/%d' % self.task_id))
+        self.assertNotIn('AI 催办话术', html)
+
+    # --- 生成 → 预填 → 确认发出 ---
+
+    def test_generate_prefills_editable_textarea(self):
+        """点击生成后应同步生成并在详情页预填可编辑文本域。"""
+        self._enable_ai(text='请于周五前反馈任务进展')
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/ai/trigger',
+            data={'task_id': self.task_id, 'source': 'detail'},
+            follow_redirects=True)
+        html = self._html(resp)
+        self.assertIn('请于周五前反馈任务进展', html)
+        self.assertIn('确认发送给负责人', html)
+        # 内容落在可编辑的 textarea（name=content）里
+        self.assertIn('name="content"', html)
+
+    def test_adopt_sends_edited_content_as_message(self):
+        """确认采纳应把（可编辑后的）内容作为站内信发给负责人。"""
+        self._enable_ai(text='原稿提醒内容')
+        self._login('admin', 'admin123456')
+        self.client.post(
+            '/ai/trigger',
+            data={'task_id': self.task_id, 'source': 'detail'},
+            follow_redirects=True)
+        log = models.list_ai_logs(1)[0]
+        self.assertTrue(log['success'])
+
+        edited = '人工修改后的催办话术'
+        self.client.post('/ai/adopt/%d' % log['log_id'],
+                         data={'content': edited, 'next': 'detail'},
+                         follow_redirects=True)
+
+        # 负责人应收到一条 ai_reminder 站内信，内容为修改后的版本
+        msgs = models.get_messages(self.owner_id)
+        self.assertTrue(any(m['type'] == 'ai_reminder'
+                            and m['content'] == edited for m in msgs))
+        self.assertTrue(models.get_ai_log(log['log_id'])['adopted'])
+
+    def test_adopt_rejects_empty_content(self):
+        """内容被清空时确认应被拒，不发出空站内信。"""
+        self._enable_ai(text='原稿')
+        self._login('admin', 'admin123456')
+        self.client.post(
+            '/ai/trigger',
+            data={'task_id': self.task_id, 'source': 'detail'},
+            follow_redirects=True)
+        log = models.list_ai_logs(1)[0]
+        self.client.post('/ai/adopt/%d' % log['log_id'],
+                         data={'content': '   ', 'next': 'detail'},
+                         follow_redirects=True)
+        msgs = models.get_messages(self.owner_id)
+        self.assertFalse(any(m['type'] == 'ai_reminder' for m in msgs))
+        self.assertFalse(models.get_ai_log(log['log_id'])['adopted'])
+
+    def test_generate_failure_shows_error(self):
+        """模型调用失败应在详情页回显错误，并可重新生成。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': False, 'text': None, 'error': '连接本地模型超时'}
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/ai/trigger',
+            data={'task_id': self.task_id, 'source': 'detail'},
+            follow_redirects=True)
+        html = self._html(resp)
+        self.assertIn('本次生成失败', html)
+        self.assertIn('连接本地模型超时', html)
+        self.assertIn('重新生成', html)
+
+
+class TestAIStructuredTaskDraft(unittest.TestCase):
+    """V5 Phase 1 PR-2：任务描述结构化抽取预填。
+
+    覆盖：管理员入口渲染、未启用/非管理员拦截、AI 抽取后预填到建任务表单、
+    确认后走既有 task.task_new 正常建档（AI 不碰 create_task）、生成失败回退人工录入。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app()
+        cls.app.config['TESTING'] = True
+
+    def setUp(self):
+        reset_database()
+        conn = db.get_db()
+        conn.execute('DELETE FROM ai_queue')
+        conn.execute('DELETE FROM ai_log')
+        conn.commit()
+        self.client = make_client(self.app)
+        self._orig_ai = config.AI_ENABLED
+        self._orig_call = ai_service.call_model
+        self.admin_id = create_test_user('admin', '管理员',
+                                         password='admin123456', role='admin')
+        self.owner_id = create_test_user('owner', '张三',
+                                         password='owner123456', role='owner')
+
+    def tearDown(self):
+        config.AI_ENABLED = self._orig_ai
+        ai_service.call_model = self._orig_call
+
+    def _login(self, username, password):
+        return self.client.post(
+            '/login', data={'username': username, 'password': password},
+            follow_redirects=False)
+
+    def _html(self, resp):
+        return resp.data.decode('utf-8')
+
+    def _enable_ai(self, text):
+        """开启 AI 并把模型调用替换成可控的假响应（text 即模型输出）。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': True, 'text': text, 'error': None}
+
+    def _json_draft(self):
+        return (
+            '{"title":"完成季度汇报材料","priority":"high","due_date":"2026-09-20",'
+            '"risk_note":"数据口径尚未对齐","collaborators":"财务部、信息中心",'
+            '"description":"王五牵头，下周三前完成季度汇报材料。"}'
+        )
+
+    # --- 入口渲染 / 权限 ---
+
+    def test_admin_sees_draft_input_when_enabled(self):
+        """AI 启用且为管理员时，应看到粘贴原始文本的入口。"""
+        self._enable_ai(self._json_draft())
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/ai/draft'))
+        self.assertIn('name="raw_text"', html)
+        self.assertIn('生成结构化草稿', html)
+
+    def test_disabled_redirects_to_console(self):
+        """AI 未启用时 GET /ai/draft 应跳转回控制台，不渲染入口。"""
+        self._login('admin', 'admin123456')
+        resp = self.client.get('/ai/draft')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/ai', resp.headers.get('Location', ''))
+
+    def test_owner_cannot_access_draft(self):
+        """AI 仅管理员可用，负责人访问应被拒（403）。"""
+        self._enable_ai(self._json_draft())
+        self._login('owner', 'owner123456')
+        resp = self.client.get('/ai/draft')
+        self.assertEqual(resp.status_code, 403)
+
+    # --- 抽取 → 预填 ---
+
+    def test_draft_prefills_new_task_form(self):
+        """提交自由文本后，应同步生成并把结构化字段预填进建任务表单。"""
+        self._enable_ai(self._json_draft())
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/ai/draft',
+            data={'raw_text': '下周三前请王五牵头完成季度汇报材料，优先级高，'
+                              '涉及财务部与信息中心，风险是数据口径未对齐。'},
+            follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        html = self._html(self.client.get(resp.headers['Location'],
+                                          follow_redirects=True))
+        # 标题 / 优先级 / 截止日期 / 协同方 / 风险点 / 描述 均预填
+        self.assertIn('value="完成季度汇报材料"', html)
+        self.assertIn('high" selected', html)
+        self.assertIn('value="2026-09-20"', html)
+        self.assertIn('value="财务部、信息中心"', html)
+        self.assertIn('数据口径尚未对齐', html)
+        self.assertIn('王五牵头', html)
+        # 确认动作仍是既有建任务路由（AI 不另行建档）
+        self.assertIn('action="/tasks/new"', html)
+
+    # --- 确认建档 ---
+
+    def test_draft_confirm_creates_task(self):
+        """确认预填草稿应走 task.task_new 正常建档，create_task 不被 AI 改动。"""
+        self._enable_ai(self._json_draft())
+        self._login('admin', 'admin123456')
+        self.client.post(
+            '/ai/draft',
+            data={'raw_text': '下周三前请王五牵头完成季度汇报材料。'},
+            follow_redirects=True)
+
+        before = db.query_one("SELECT COUNT(*) AS c FROM tasks")['c']
+        resp = self.client.post(
+            '/tasks/new',
+            data={
+                'title': '完成季度汇报材料',
+                'description': '王五牵头，下周三前完成季度汇报材料。',
+                'priority': 'high',
+                'due_date': '2026-09-20',
+                'risk_note': '数据口径尚未对齐',
+                'collaborators': '财务部、信息中心',
+                'assignee': str(self.owner_id),
+            },
+            follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        after = db.query_one("SELECT COUNT(*) AS c FROM tasks")['c']
+        self.assertEqual(after, before + 1)
+
+        row = db.query_one(
+            "SELECT * FROM tasks WHERE title = '完成季度汇报材料' "
+            "ORDER BY task_id DESC LIMIT 1")
+        self.assertEqual(row['priority'], 'high')
+        self.assertEqual(row['due_date'], '2026-09-20')
+        self.assertEqual(row['assignee'], self.owner_id)
+
+    # --- 失败回退 ---
+
+    def test_draft_failure_falls_back(self):
+        """模型调用失败应回退为人工录入（错误进 description），绝不自动建档。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': False, 'text': None, 'error': '模型连接超时'}
+        self._login('admin', 'admin123456')
+        resp = self.client.post(
+            '/ai/draft',
+            data={'raw_text': '任意文本'},
+            follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        html = self._html(self.client.get(resp.headers['Location'],
+                                          follow_redirects=True))
+        self.assertIn('生成失败', html)
+        self.assertIn('模型连接超时', html)
+        # 表单仍可提交（管理员手动补全），标题为空预填
+        self.assertIn('action="/tasks/new"', html)
+        self.assertIn('value=""', html)
+        # 失败不应留下任何任务
+        self.assertEqual(db.query_one("SELECT COUNT(*) AS c FROM tasks")['c'], 0)
+
+
+class TestAIBrief(unittest.TestCase):
+    """V5 Phase 1 PR-3：督办简报 / 周报（管理员，预览+确认后双渠道发）。
+
+    覆盖：入口权限（管理员 + 已启用 AI）、owner 不可见、生成后预览页预填草稿、
+    确认发送把内容作为站内信发给管理员 +（启用邮件时）入队邮件、
+    生成失败回显且不提供发送入口、AI 未启用拦截。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app()
+        cls.app.config['TESTING'] = True
+
+    def setUp(self):
+        reset_database()
+        conn = db.get_db()
+        for t in ('ai_queue', 'ai_log', 'email_queue', 'email_log'):
+            conn.execute('DELETE FROM %s' % t)
+        conn.commit()
+        self.client = make_client(self.app)
+        self._orig_ai = config.AI_ENABLED
+        self._orig_mail = config.MAIL_ENABLED
+        self._orig_call = ai_service.call_model
+        self.admin_id = create_test_user('admin', '管理员',
+                                         password='admin123456', role='admin')
+        self.owner_id = create_test_user('owner', '张三',
+                                         password='owner123456', role='owner')
+
+    def tearDown(self):
+        config.AI_ENABLED = self._orig_ai
+        config.MAIL_ENABLED = self._orig_mail
+        ai_service.call_model = self._orig_call
+
+    def _login(self, username, password):
+        return self.client.post(
+            '/login', data={'username': username, 'password': password},
+            follow_redirects=False)
+
+    def _html(self, resp):
+        return resp.data.decode('utf-8')
+
+    def _enable_ai(self, text='今日逾期3项，请重点关注风险任务'):
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': True, 'text': text, 'error': None}
+
+    def _set_admin_email(self, email='admin@test.com'):
+        models.update_user_email(self.admin_id, email)
+
+    # --- 入口渲染 / 权限 ---
+
+    def test_admin_sees_brief_entry_when_enabled(self):
+        """AI 启用且为管理员时，应看到简报类型选择与生成入口。"""
+        self._enable_ai()
+        self._login('admin', 'admin123456')
+        html = self._html(self.client.get('/ai/brief'))
+        self.assertIn('name="brief_type"', html)
+        self.assertIn('生成', html)
+
+    def test_disabled_blocks_redirect(self):
+        """AI 未启用时 GET /ai/brief 应跳转回控制台。"""
+        self._login('admin', 'admin123456')
+        resp = self.client.get('/ai/brief')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/ai', resp.headers.get('Location', ''))
+
+    def test_owner_cannot_access(self):
+        """AI 仅管理员可用，负责人访问应被拒（403）。"""
+        self._enable_ai()
+        self._login('owner', 'owner123456')
+        resp = self.client.get('/ai/brief')
+        self.assertEqual(resp.status_code, 403)
+
+    # --- 生成 → 预览 ---
+
+    def test_brief_generate_prefills_result(self):
+        """提交生成后应立即调用模型并跳到预览页，正文预填在可编辑文本域。"""
+        self._enable_ai(text='【每日简报】今日逾期3项，建议优先处置。')
+        self._login('admin', 'admin123456')
+        resp = self.client.post('/ai/brief', data={'brief_type': 'daily'},
+                                follow_redirects=True)
+        html = self._html(resp)
+        self.assertIn('【每日简报】', html)
+        self.assertIn('name="content"', html)
+        self.assertIn('确认发送', html)
+        # 应已落一条 daily_brief 成功日志
+        logs = [l for l in models.list_ai_logs(5)
+                if l['job_type'] == 'daily_brief' and l['success']]
+        self.assertTrue(logs)
+
+    # --- 确认发送：站内信 ---
+
+    def test_brief_send_sends_messages_to_admins(self):
+        """确认发送应把内容作为 ai_brief 站内信发给全体管理员（不依赖邮件）。"""
+        config.MAIL_ENABLED = False
+        self._enable_ai(text='本周闭环12项，逾期2项待处置。')
+        self._login('admin', 'admin123456')
+        self.client.post('/ai/brief', data={'brief_type': 'weekly'},
+                         follow_redirects=True)
+        log = [l for l in models.list_ai_logs(5)
+               if l['job_type'] == 'weekly_report' and l['success']][0]
+
+        self.client.post('/ai/brief/%d/send' % log['log_id'],
+                         data={'content': '本周闭环12项，逾期2项待处置。'},
+                         follow_redirects=True)
+
+        msgs = models.get_messages(self.admin_id)
+        self.assertTrue(any(m['type'] == 'ai_brief'
+                            and m['content'] == '本周闭环12项，逾期2项待处置。'
+                            for m in msgs))
+        self.assertTrue(models.get_ai_log(log['log_id'])['adopted'])
+        # 未启用邮件 → 不应有邮件入队
+        self.assertEqual(
+            db.query_one("SELECT COUNT(*) AS c FROM email_queue "
+                         "WHERE mail_type = ?",
+                         (mail_constants.MAIL_TYPE_AI_BRIEF,))['c'], 0)
+
+    # --- 确认发送：邮件入队 ---
+
+    def test_brief_send_with_mail_enqueues_email(self):
+        """启用邮件时，确认发送应同时把简报入队邮件（按订阅等级去重）。"""
+        config.MAIL_ENABLED = True
+        self._set_admin_email('admin@test.com')
+        self._enable_ai(text='每日督办简报：逾期1项。')
+        self._login('admin', 'admin123456')
+        self.client.post('/ai/brief', data={'brief_type': 'daily'},
+                         follow_redirects=True)
+        log = [l for l in models.list_ai_logs(5)
+               if l['job_type'] == 'daily_brief' and l['success']][0]
+
+        self.client.post('/ai/brief/%d/send' % log['log_id'],
+                         data={'content': '每日督办简报：逾期1项。'},
+                         follow_redirects=True)
+
+        # 站内信 + 邮件 都应存在
+        msgs = models.get_messages(self.admin_id)
+        self.assertTrue(any(m['type'] == 'ai_brief' for m in msgs))
+        mail = db.query_one(
+            "SELECT * FROM email_queue WHERE mail_type = ? AND recipient_id = ?",
+            (mail_constants.MAIL_TYPE_AI_BRIEF, self.admin_id))
+        self.assertIsNotNone(mail)
+        self.assertEqual(mail['subject'], '督办每日督办简报')
+        self.assertIn('逾期1项', mail['body'])
+
+    # --- 生成失败回显 ---
+
+    def test_brief_failure_shows_error(self):
+        """模型调用失败应在预览页回显错误，且不提供发送入口。"""
+        config.AI_ENABLED = True
+        ai_service.call_model = lambda prompt: {
+            'success': False, 'text': None, 'error': '连接本地模型超时'}
+        self._login('admin', 'admin123456')
+        resp = self.client.post('/ai/brief', data={'brief_type': 'daily'},
+                                follow_redirects=True)
+        html = self._html(resp)
+        self.assertIn('生成失败', html)
+        self.assertIn('连接本地模型超时', html)
+        # 失败时不提供发送表单（route 会拒绝发送失败记录）
+        self.assertNotIn('name="content"', html)
+
+
 class TestStaticAssetVersion(unittest.TestCase):
     """静态资源缓存串（cache-busting）：防「改了样式忘了升版本号」回归。
 
@@ -3661,6 +4124,10 @@ if __name__ == '__main__':
     suite.addTests(loader.loadTestsFromTestCase(TestBehindProxy))
     # DEF-002：CSRF 防护
     suite.addTests(loader.loadTestsFromTestCase(TestCSRF))
+    # V5 AI 辅助生成（Phase 1 ② + PR-2 + PR-3）
+    suite.addTests(loader.loadTestsFromTestCase(TestAIDraftReminder))
+    suite.addTests(loader.loadTestsFromTestCase(TestAIStructuredTaskDraft))
+    suite.addTests(loader.loadTestsFromTestCase(TestAIBrief))
 
     # 运行测试
     runner = unittest.TextTestRunner(verbosity=2)

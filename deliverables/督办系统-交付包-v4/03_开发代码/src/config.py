@@ -386,3 +386,52 @@ MAIL_CIRCUIT_PAUSE_MINUTES = _env_int('MAIL_CIRCUIT_PAUSE_MINUTES', 60)
 # 注：MAIL_SMTP_PASSWORD 不在此处读取。
 #     它只有两处来源：环境变量 / .env（明文）、数据库（加密，见 crypto_util.py）。
 #     放在 config 里会被模块级常量固化，既不利于设置页覆盖，也增加泄露面。
+
+# ============================================================
+# AI 能力配置（V5 迭代：AI 辅助生成）
+# ============================================================
+# 取值优先级：系统环境变量 / .env > 代码默认值。
+# ⚠️ 铁律复核：所有默认值必须让「不配置 = 行为不变」成立。
+#    AI_ENABLED 默认 False，因此未配置时 AI 功能完全不激活，行为与 V4 完全一致。
+# ------------------------------------------------------------
+
+# AI 功能总开关。False 时队列不再扫描生成，页面仅只读展示。
+AI_ENABLED = _env_bool('AI_ENABLED', False)
+
+# 模型提供方：'local'（Ollama 本地，零数据出网）/ 'cloud'（OpenAI 兼容云端）
+AI_PROVIDER = _env_str('AI_PROVIDER', 'local')
+
+# 本地模型接口地址（Ollama 默认端口 11434）
+AI_API_BASE_URL = _env_str('AI_API_BASE_URL', 'http://127.0.0.1:11434')
+
+# 模型名（本地填 Ollama 模型名；云端填 OpenAI 兼容模型名）
+AI_MODEL_NAME = _env_str('AI_MODEL_NAME', 'qwen2.5:7b')
+
+# 单次模型调用超时（秒）
+AI_TIMEOUT = _env_int('AI_TIMEOUT', 30)
+
+# 送模型前是否脱敏（手机号 / 邮箱 / 长数字证件号）
+AI_MASK_DATA = _env_bool('AI_MASK_DATA', True)
+
+# 每轮扫描最多处理几个 AI 任务（限流，避免瞬间打满本机 GPU / API 配额）
+AI_BATCH_LIMIT = _env_int('AI_BATCH_LIMIT', 5)
+
+# 单任务最多重试几次（超过后标记永久失败归档）
+AI_RETRY_MAX = _env_int('AI_RETRY_MAX', 3)
+
+# 重试间隔（分钟），长度应等于 AI_RETRY_MAX；不够时取最后一项兜底
+AI_RETRY_BACKOFF = _env_str('AI_RETRY_BACKOFF', '1,5,15')
+
+# 连续失败多少次触发通用熔断，熔断后暂停 N 分钟再自动试探
+AI_CIRCUIT_FAIL_THRESHOLD = _env_int('AI_CIRCUIT_FAIL_THRESHOLD', 10)
+
+# 通用熔断的暂停时长（分钟）
+AI_CIRCUIT_PAUSE_MINUTES = _env_int('AI_CIRCUIT_PAUSE_MINUTES', 60)
+
+# 简报/周报定时生成开关（PR-3）：'off'（默认，不定时）/ 'daily' / 'weekly' / 'both'。
+# 仅在 AI_ENABLED=True 时生效；复用 09:00 扫描自动生成草稿入队，需管理员人工确认后才投递。
+AI_BRIEF_SCHEDULE = _env_str('AI_BRIEF_SCHEDULE', 'off')
+
+# 注：AI_API_KEY 不在此处读取。
+#     它只有一处来源：环境变量 / .env（明文，由 ai_service 直接读取）。
+#     刻意不进 config 默认值，避免密钥被模块级常量固化或误打印。
