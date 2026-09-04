@@ -557,12 +557,26 @@ def main():
          '督办系统-邮件功能配置指南.md'),
         (os.path.join(docs_src, '生产部署指南.md'),
          '督办系统-生产部署指南.md'),
+        (os.path.join(docs_src, '演示话术-督办系统-Demo脚本.md'),
+         '演示话术-督办系统-Demo脚本.md'),
         (os.path.join(base, '演示指引.md'),
          '演示指引.md'),
     )
     for src, out_name in USER_DOCS:
         if copy_file(src, os.path.join(dst, out_name)):
             print(f'  [OK]   已同步 {out_name}')
+
+    # 演示话术内嵌的流程图 PNG 随包一起带到根 assets/，保证 md 内图片在包内可渲染
+    # （话术脚本用相对路径 assets/xxx.png 引用，故镜像到包根 assets/ 子目录）。
+    assets_src = os.path.join(docs_src, 'assets')
+    if os.path.isdir(assets_src):
+        assets_dst = os.path.join(dst, 'assets')
+        os.makedirs(assets_dst, exist_ok=True)
+        for fn in sorted(os.listdir(assets_src)):
+            if fn.lower().endswith('.png'):
+                if copy_file(os.path.join(assets_src, fn),
+                             os.path.join(assets_dst, fn)):
+                    print(f'  [OK]   已同步 assets/{fn}')
 
     # 5) 根 README
     # {TESTS} 从测试报告的机器可读摘要里真读，不写死——
