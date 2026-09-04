@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}督办简报 / 周报 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-left">
+    <h1 class="page-title">督办简报 / 周报</h1>
+    <span class="page-hint">基于当前预警态势，由本地模型生成面向管理层的每日简报或每周周报（草稿，需你确认后才发送）。</span>
+  </div>
+  <div class="page-header-actions">
+    <a href="{{ url_for('ai.console') }}" class="btn btn-secondary">返回 AI 控制台</a>
+  </div>
+</div>
+
+{% if not current_user.role == 'admin' %}
+<div class="mail-banner danger">
+  <strong>无权限</strong><span>简报 / 周报仅管理员可生成与发送。</span>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">生成草稿</div>
+  <form method="post" action="{{ url_for('ai.brief') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-row">
+      <select name="brief_type" class="form-control" required>
+        <option value="daily">每日督办简报（当日态势）</option>
+        <option value="weekly">每周督办周报（近 7 天聚合）</option>
+      </select>
+      <button type="submit" class="btn btn-primary">生成</button>
+    </div>
+    <p class="empty-hint" style="margin-top:10px;">
+      生成结果会立即调用本地模型；若模型不可用将显示错误，可手动填写后发送。
+    </p>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">近期简报 / 周报</div>
+  {% if logs %}
+  <table class="table">
+    <thead><tr><th>#</th><th>类型</th><th>结果</th><th>已发送</th><th>完成时间</th><th></th></tr></thead>
+    <tbody>
+    {% for l in logs %}
+    <tr>
+      <td>{{ l.log_id }}</td>
+      <td>{{ labels['weekly' if l.job_type == 'weekly_report' else 'daily'] }}</td>
+      <td>{{ '成功' if l.success else '失败' }}</td>
+      <td>{{ '是' if l.adopted else '否' }}</td>
+      <td>{{ l.finished_at or l.created_at }}</td>
+      <td><a href="{{ url_for('ai.brief_result', log_id=l.log_id) }}">查看</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-hint">暂无简报 / 周报记录。</p>
+  {% endif %}
+</div>
+
+{% endblock %}

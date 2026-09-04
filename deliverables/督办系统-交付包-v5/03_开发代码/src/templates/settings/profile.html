@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}个人设置 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1 class="page-title">个人设置</h1>
+</div>
+
+{# 基本信息修改 #}
+<div class="card" style="max-width:560px;">
+    <div class="card-title">基本信息</div>
+    <form method="POST" action="{{ url_for('settings.profile') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label>显示姓名</label>
+            <input type="text" name="display_name" class="form-control"
+                   value="{{ current_user['display_name'] }}" required>
+        </div>
+        <div class="form-group">
+            <label>用户名（不可修改）</label>
+            <input type="text" class="form-control" value="{{ current_user['username'] }}" disabled>
+        </div>
+        <div class="form-group">
+            <label>角色</label>
+            <input type="text" class="form-control"
+                   value="{{ '管理员' if current_user['role'] == 'admin' else '负责人' }}" disabled>
+        </div>
+        <button type="submit" class="btn btn-primary">保存显示名</button>
+    </form>
+</div>
+
+{# 邮件通知（V4） #}
+<div class="card" style="max-width:560px;">
+    <div class="card-title">邮件通知</div>
+    <form method="POST" action="{{ url_for('settings.mail_preference') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label>我的邮箱</label>
+            <input type="email" name="email" class="form-control"
+                   value="{{ current_user['email'] or '' }}" placeholder="name@example.com">
+            <p class="text-muted" style="font-size:12px;margin-top:4px;">
+                留空表示不接收任何邮件（站内信不受影响）。该地址仅你本人与管理员可见。
+            </p>
+        </div>
+        <div class="form-group">
+            <label>自动预警邮件范围</label>
+            <select name="mail_notify_level" class="form-control">
+                {% for lv in notify_levels %}
+                <option value="{{ lv }}" {{ 'selected' if (current_user['mail_notify_level'] or 'overdue') == lv }}>
+                    {{ notify_level_labels[lv] }}
+                </option>
+                {% endfor %}
+            </select>
+            <p class="text-muted" style="font-size:12px;margin-top:4px;">
+                此设置只影响系统自动发出的预警邮件；任务分配通知与管理员手动提醒始终会发送。
+            </p>
+        </div>
+        <button type="submit" class="btn btn-primary">保存邮件设置</button>
+        <a href="{{ url_for('mail.my_mails') }}" class="btn btn-secondary" style="margin-left:8px;">查看我的邮件记录</a>
+    </form>
+</div>
+
+{# 修改密码 #}
+<div class="card" style="max-width:560px;">
+    <div class="card-title">修改密码</div>
+    <form method="POST" action="{{ url_for('settings.profile') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label>原密码</label>
+            <input type="password" name="old_password" class="form-control" placeholder="请输入当前密码">
+        </div>
+        <div class="form-group">
+            <label>新密码</label>
+            <input type="password" name="new_password" class="form-control"
+                   placeholder="至少 {{ password_min_length }} 位，字母与数字混合"
+                   minlength="{{ password_min_length }}">
+        </div>
+        <div class="form-group">
+            <label>确认新密码</label>
+            <input type="password" name="confirm_password" class="form-control" placeholder="再次输入新密码">
+        </div>
+        <p class="text-muted" style="font-size:12px;margin-bottom:12px;">
+            如不需修改密码，请留空以上三项。<br>
+            新密码至少 {{ password_min_length }} 位，且不能是常见弱口令（如 123456、password）。
+        </p>
+        <button type="submit" class="btn btn-primary">修改密码</button>
+    </form>
+</div>
+
+{% endblock %}

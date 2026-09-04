@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}AI 结果 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-left">
+    <h1 class="page-title">AI 生成结果</h1>
+    <span class="page-hint">#{{ log.log_id }} · 任务
+      {% if task %}#{{ task.task_id }} {{ task.title }}{% else %}-{% endif %}
+      · {{ log.job_type }}</span>
+  </div>
+  <div class="page-header-actions">
+    <a href="{{ url_for('ai.console') }}" class="btn btn-ghost">返回控制台</a>
+  </div>
+</div>
+
+<div class="card">
+  {% if log.success %}
+  <div class="card-header">生成内容</div>
+  <div class="ai-output">{{ log.result_text }}</div>
+  {% if not log.adopted %}
+  <form method="post" action="{{ url_for('ai.adopt', log_id=log.log_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn btn-primary">
+      采纳并发送给负责人（站内信）
+    </button>
+  </form>
+  {% else %}
+  <p class="empty-hint">此结果已被采纳并发送。</p>
+  {% endif %}
+  {% else %}
+  <div class="card-header">生成失败</div>
+  <p class="error-text">{{ log.error_message }}</p>
+  {% endif %}
+</div>
+
+{% endblock %}

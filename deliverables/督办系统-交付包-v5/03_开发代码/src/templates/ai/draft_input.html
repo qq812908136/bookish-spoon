@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}AI 结构化建任务 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-left">
+    <h1 class="page-title">AI 结构化建任务</h1>
+    <span class="page-hint">粘贴一段自由文本（会议纪要 / 口头交代 / 需求片段），由本地模型抽取为任务草稿字段并预填至建任务表单。</span>
+  </div>
+  <div class="page-header-actions">
+    <a href="{{ url_for('ai.console') }}" class="btn btn-secondary">返回 AI 控制台</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">粘贴任务描述</div>
+  <form method="post" action="{{ url_for('ai.draft') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-group">
+      <label for="raw_text">原始文本</label>
+      <textarea id="raw_text" name="raw_text" class="form-control" rows="10"
+                placeholder="例如：下周三前请王五牵头完成季度汇报材料，优先级别较高，涉及财务部与信息中心协同，主要风险是数据口径尚未对齐……">{{ (request.form.raw_text or '') }}</textarea>
+    </div>
+    <div class="flash info" style="margin: 8px 0 16px;">
+      生成结果仅作<strong>预填草稿</strong>，需你人工核对字段后再点「创建任务」才会真正建档——模型不会自动建任务。
+    </div>
+    <div class="flex gap-12">
+      <button type="submit" class="btn btn-primary">生成结构化草稿</button>
+      <a href="{{ url_for('ai.console') }}" class="btn btn-secondary">取消</a>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

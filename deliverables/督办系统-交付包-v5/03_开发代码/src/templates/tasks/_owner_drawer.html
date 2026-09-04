@@ -1,0 +1,69 @@
+{# ============================================================
+   tasks/_owner_drawer.html — Owner 抽屉片段（V2 批次 3，Q8）
+
+   由 GET /tasks/owner/<uid>/drawer 渲染（闭环矩阵点负责人名字打开）。
+   内容：负责人信息 + 推送提醒按钮（仅 admin 可见）+ 该负责人任务列表。
+   结构契约（与 static/js/main.js 对应）：
+   - .drawer-close                关闭按钮
+   - .remind-btn[data-url]        推送提醒（POST /tasks/remind，JSON）
+   - .owner-task-row[data-drawer] 任务行点击 → 打开任务详情抽屉
+
+   UI 语言（061）：头部统一「小标签 + 徽标 + 操作区」；任务行改为白底卡片
+   （原为浅灰底），hover 蓝边上浮，与任务抽屉的卡片层次保持一致。
+   ============================================================ #}
+{% from "macros/icons.html" import icon %}
+
+<div class="drawer-header">
+    <div class="drawer-header-main">
+        <span class="avatar">{{ owner['display_name'][:1] }}</span>
+        <span class="drawer-eyebrow">{{ owner['display_name'] }} 的任务</span>
+        {% if status_filter %}<span class="status-badge st-{{ status_filter }}">{{ status_labels[status_filter] }}</span>{% endif %}
+    </div>
+    <div class="drawer-header-actions">
+        {% if current_user['role'] == 'admin' %}
+        <button type="button" class="btn btn-primary btn-sm remind-btn"
+                data-url="{{ url_for('task.task_remind', owner_id=owner['user_id']) }}"
+                title="给该负责人发一条督办提醒站内信">{{ icon('send', 14) }} 推送提醒</button>
+        {% endif %}
+        <button class="drawer-close" type="button" title="关闭" aria-label="关闭抽屉">{{ icon('x', 18) }}</button>
+    </div>
+</div>
+
+<div class="drawer-body">
+
+    {# --- 负责人概要 --- #}
+    <div class="drawer-info-card" style="margin-bottom:16px;">
+        <div style="font-size:14px;font-weight:600;">{{ owner['display_name'] }}（{{ owner['username'] }}）</div>
+        <div class="text-muted" style="font-size:12px;margin-top:4px;line-height:1.6;">
+            共 {{ total }} 条任务{% if status_filter %} · 仅「{{ status_labels[status_filter] }}」{% endif %}
+            · 按截止日期升序，最多展示最近 50 条
+        </div>
+    </div>
+
+    {# --- 任务列表（点行打开任务详情抽屉） --- #}
+    {% if tasks %}
+        {% for t in tasks %}
+        <div class="owner-task-row" data-drawer="{{ url_for('task.task_drawer', task_id=t['task_id']) }}">
+            <div style="flex:1;min-width:0;">
+                <div class="owner-task-title">{{ t['title'] }}</div>
+                <div class="owner-task-meta">
+                    <span class="priority-pill {{ t['priority'] }}">{{ priority_labels[t['priority']] }}</span>
+                    <span {% if t['status'] == 'overdue' %}style="color:var(--color-red);font-weight:500;"{% endif %}>{{ icon('calendar', 11) }} {{ t['due_date'] }}</span>
+                </div>
+            </div>
+            <div class="owner-task-right">
+                <div class="mini-progress" title="进度 {{ t['progress_percent'] or 0 }}%">
+                    <div class="bar"><div class="fill" style="width: {{ t['progress_percent'] or 0 }}%;"></div></div>
+                    <span class="num">{{ t['progress_percent'] or 0 }}%</span>
+                </div>
+                <span class="status-badge st-{{ t['status'] }}">{{ status_labels[t['status']] }}</span>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+    <div style="text-align:center;padding:48px 20px;color:var(--color-text-muted);">
+        {{ icon('inbox', 36) }}
+        <p style="margin-top:8px;">{% if status_filter %}该负责人暂无「{{ status_labels[status_filter] }}」任务{% else %}该负责人暂无任务{% endif %}</p>
+    </div>
+    {% endif %}
+</div>

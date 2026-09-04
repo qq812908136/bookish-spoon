@@ -1,0 +1,25 @@
+# 督办系统 — Caddy 反向代理 + 自动 HTTPS 样例
+#
+# 用途：把督办系统（HTTP，监听 127.0.0.1:5000）以 HTTPS 对外暴露。
+# Caddy 会自动向 Let's Encrypt 申请并续签证书，无需手工配置。
+#
+# 使用步骤：
+#   1. 让督办系统以「本机 + Waitress」运行：生产启动.bat（已设 SERVER=waitress, HOST=127.0.0.1）
+#   2. 把本文件存为 Caddyfile（同级目录，或任意位置）
+#   3. 启动：caddy run --config Caddyfile
+#   4. 浏览器访问 https://你的域名 即可（的内部 5000 端口不对外直接暴露）
+#
+# 反向代理下务必在 .env 中开启（详见 docs/生产部署指南.md）：
+#   SESSION_COOKIE_SECURE=true
+#   BEHIND_PROXY=true
+#   BEHIND_PROXY_TRUSTED_HOPS=1
+
+# 有公网域名时（推荐）：
+your-domain.example.com {
+    reverse_proxy 127.0.0.1:5000
+}
+
+# 纯内网、无域名时，可用 IP 形式（浏览器会告警自签名证书，需手动信任一次）：
+# https://192.168.1.10:5000 {
+#     reverse_proxy 127.0.0.1:5000
+# }

@@ -1,0 +1,12 @@
+# ===== 核心框架 =====
+Flask==3.0.3
+
+# ===== 导出 Excel（P1-004：任务导出 .xlsx，每列自适应列宽） =====
+openpyxl==3.1.5
+
+# ===== 生产级 WSGI 服务器（DEF-004：生产部署用 Waitress 替代 Flask 开发服务器） =====
+# 离线程序(.exe) 已内置；源码部署时 pip install -r requirements.txt 即包含。
+waitress==3.0.2
+
+# ===== 打包工具（仅打包时需要，运行时不需要） =====
+pyinstaller==6.10.0

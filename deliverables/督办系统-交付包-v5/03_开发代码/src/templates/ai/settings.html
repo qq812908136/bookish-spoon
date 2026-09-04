@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}AI 辅助 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-left">
+    <h1 class="page-title">AI 辅助生成</h1>
+    <span class="page-hint">本地模型驱动的催办话术 / 任务综述生成。未启用时仅展示，不影响任何业务。</span>
+  </div>
+  <div class="page-header-actions">
+    <span class="status-badge {{ 'green' if overview.enabled else 'gray' }}">
+      {{ '已启用' if overview.enabled else '未启用' }}
+    </span>
+  </div>
+</div>
+
+{% if not overview.enabled %}
+<div class="mail-banner danger">
+  <strong>AI 功能当前未启用</strong>
+  <span>在 .env 中设置 <code>AI_ENABLED=true</code> 并配置本地模型（如 Ollama）后，此处可触发生成。</span>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">配置概览</div>
+  <table class="info-table">
+    <tr><th>提供方</th><td>{{ overview.provider }}</td></tr>
+    <tr><th>接口地址</th><td>{{ overview.base_url }}</td></tr>
+    <tr><th>模型</th><td>{{ overview.model }}</td></tr>
+    <tr><th>送模前脱敏</th><td>{{ '开启' if overview.mask else '关闭' }}</td></tr>
+    <tr><th>熔断状态</th><td>{{ '已熔断' if overview.circuit.state == 'open' else '正常' }}
+      {% if overview.circuit.reason %}（{{ overview.circuit.reason }}）{% endif %}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-header">为任务生成催办话术</div>
+  <form method="post" action="{{ url_for('ai.trigger') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-row">
+      <select name="task_id" class="form-control" required>
+        <option value="">选择任务…</option>
+        {% for t in tasks %}
+        <option value="{{ t.task_id }}">#{{ t.task_id }} {{ t.title }}（{{ t.status }}）</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-primary">生成</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">督办简报 / 周报</div>
+  <p class="empty-hint">基于当前预警态势，生成面向管理层的每日简报或每周周报（AI 草稿，需人工确认后发送）。</p>
+  <div class="flex gap-12">
+    <a href="{{ url_for('ai.brief') }}" class="btn btn-primary">生成简报 / 周报</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">近期生成记录</div>
+  {% if logs %}
+  <table class="table">
+    <thead><tr><th>#</th><th>任务</th><th>类型</th><th>结果</th><th>采纳</th><th>时间</th><th></th></tr></thead>
+    <tbody>
+    {% for l in logs %}
+    <tr>
+      <td>{{ l.log_id }}</td>
+      <td>{% if l.task_id %}#{{ l.task_id }}{% else %}-{% endif %}</td>
+      <td>{{ l.job_type }}</td>
+      <td>{{ '成功' if l.success else '失败' }}</td>
+      <td>{{ '是' if l.adopted else '否' }}</td>
+      <td>{{ l.finished_at }}</td>
+      <td><a href="{{ url_for('ai.result', log_id=l.log_id) }}">查看</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-hint">暂无生成记录。</p>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,213 @@
+﻿{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% block title %}任务列表 - 督办系统{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1 class="page-title">任务列表</h1>
+
+    {# 批量操作工具栏（默认隐藏，JS 在选中≥1条时显示）。
+       放在页头标题右侧：勾选任务时它在标题行内出现/消失，
+       不再独占一行把下方表格顶下去。
+       控件不在 #batch-form 标签内，靠 form="batch-form" 挂回表单提交。 #}
+    <div class="batch-toolbar" id="batch-toolbar" style="display:none;">
+        <span class="batch-count">已选 <strong id="batch-selected-count">0</strong> 条</span>
+
+        <select name="action" id="batch-action-select" form="batch-form" class="form-control">
+            <option value="">选择操作...</option>
+            <option value="change_status">批量改状态</option>
+            {% if current_user['role'] == 'admin' %}
+            <option value="reassign">批量指派负责人</option>
+            {% endif %}
+        </select>
+
+        {# 批量改状态的目标状态下拉（仅当 action=change_status 时显示） #}
+        <select name="target_status" id="batch-target-status" form="batch-form" class="form-control" disabled style="display:none;">
+            <option value="in_progress">→ 进行中</option>
+            <option value="closed">→ 已闭环</option>
+            <option value="cancelled">→ 已撤销</option>
+        </select>
+
+        {# 批量指派的新负责人下拉（仅当 action=reassign 时显示） #}
+        {% if current_user['role'] == 'admin' %}
+        <select name="new_assignee" id="batch-new-assignee" form="batch-form" class="form-control" disabled style="display:none;">
+            <option value="">选择新负责人...</option>
+            {% for u in active_users %}
+            <option value="{{ u['user_id'] }}">{{ u['display_name'] }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
+
+        <button type="submit" form="batch-form" class="btn btn-primary" id="batch-apply-btn">应用</button>
+    </div>
+
+    <div class="page-header-actions">
+        {# P1-004：导出 Excel 按钮，携带当前筛选参数 #}
+        <a href="{{ url_for('task.task_export', **filters) }}" class="btn btn-secondary">{{ icon('download', 15) }} 导出 Excel</a>
+        <a href="{{ url_for('task.task_new') }}" class="btn btn-primary">{{ icon('plus', 15) }} 新建任务</a>
+    </div>
+</div>
+
+{# ============================================================ #}
+{# 筛选与搜索区 #}
+{# ============================================================ #}
+<form id="filter-form" method="GET" action="{{ url_for('task.task_list') }}">
+    <div class="toolbar">
+        <input type="text" name="keyword" class="form-control search-box"
+               value="{{ filters.keyword|default('') }}"
+               placeholder="搜索任务标题...">
+
+        <div class="filter-group">
+            <select name="status" class="form-control">
+                <option value="">状态: 全部</option>
+                {% for s in statuses %}
+                <option value="{{ s }}" {% if filters.status|default('') == s %}selected{% endif %}>
+                    {{ status_labels[s] }}
+                </option>
+                {% endfor %}
+            </select>
+
+            <select name="priority" class="form-control">
+                <option value="">优先级: 全部</option>
+                {% for p in priorities %}
+                <option value="{{ p }}" {% if filters.priority|default('') == p %}selected{% endif %}>
+                    {{ priority_labels[p] }}
+                </option>
+                {% endfor %}
+            </select>
+
+            {% if current_user['role'] == 'admin' %}
+            <select name="assignee" class="form-control">
+                <option value="">负责人: 全部</option>
+                {% for u in active_users %}
+                <option value="{{ u['user_id'] }}" {% if filters.assignee|default('') == u['user_id']|string %}selected{% endif %}>
+                    {{ u['display_name'] }}
+                </option>
+                {% endfor %}
+            </select>
+            {% endif %}
+
+            <select name="sort" class="form-control">
+                <option value="due_date_asc"  {% if filters.sort|default('due_date_asc') == 'due_date_asc' %}selected{% endif %}>截止日期 ↑</option>
+                <option value="due_date_desc" {% if filters.sort|default('') == 'due_date_desc' %}selected{% endif %}>截止日期 ↓</option>
+                <option value="priority_asc"  {% if filters.sort|default('') == 'priority_asc' %}selected{% endif %}>优先级 ↑</option>
+                <option value="priority_desc" {% if filters.sort|default('') == 'priority_desc' %}selected{% endif %}>优先级 ↓</option>
+                <option value="updated_desc"  {% if filters.sort|default('') == 'updated_desc' %}selected{% endif %}>更新时间 ↓</option>
+                <option value="updated_asc"   {% if filters.sort|default('') == 'updated_asc' %}selected{% endif %}>更新时间 ↑</option>
+            </select>
+        </div>
+    </div>
+</form>
+
+{# ============================================================ #}
+{# 批量操作表单（包裹任务表格，POST 到 /tasks/batch） #}
+{# P1-003：批量改状态 / 批量指派 #}
+{# ============================================================ #}
+<form id="batch-form" method="POST" action="{{ url_for('task.task_batch') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {# 携带当前筛选参数用于操作完成后回跳 #}
+    <input type="hidden" name="filter_status" value="{{ filters.status|default('') }}">
+    <input type="hidden" name="filter_priority" value="{{ filters.priority|default('') }}">
+    <input type="hidden" name="filter_assignee" value="{{ filters.assignee|default('') }}">
+    <input type="hidden" name="filter_keyword" value="{{ filters.keyword|default('') }}">
+    <input type="hidden" name="filter_sort" value="{{ filters.sort|default('due_date_asc') }}">
+
+    {# ============================================================ #}
+    {# 任务表格（含复选框列；V2：点行打开任务详情抽屉 + 新增进度列） #}
+    {# ============================================================ #}
+    {% if tasks %}
+    {# 分页改为 AJAX 原地刷新（main.js initPaginationAjax）：拦截分页链接，
+       用 fetch 替换 #batch-form 的内部、保持滚动位置，不再整页跳转。
+       id 保留供行内编辑/抽屉等依赖使用。 #}
+    <div class="table-scroll">
+    <table class="task-table" id="task-table">
+        <thead>
+            <tr>
+                <th class="col-checkbox">
+                    <input type="checkbox" id="select-all" title="全选/反选">
+                </th>
+                <th>标题</th>
+                <th>负责人</th>
+                <th>进度</th>
+                <th>优先级</th>
+                <th>状态</th>
+                <th>截止日期</th>
+                <th>更新时间</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for task in tasks %}
+            <tr class="task-row {{ 'row-overdue' if task['status'] == 'overdue' else '' }} {{ 'row-cancelled' if task['status'] == 'cancelled' else '' }}"
+                data-detail-url="{{ url_for('task.task_detail', task_id=task['task_id']) }}"
+                title="点击跳转到任务详情页">
+                <td class="col-checkbox">
+                    <input type="checkbox" name="task_ids" value="{{ task['task_id'] }}" class="task-checkbox">
+                </td>
+                <td>{{ task['title'] }}</td>
+                <td>{{ task['assignee_name'] }}</td>
+                <td>
+                    <div class="mini-progress" title="进度 {{ task['progress_percent'] or 0 }}%">
+                        <div class="bar"><div class="fill" style="width: {{ task['progress_percent'] or 0 }}%;"></div></div>
+                        <span class="num">{{ task['progress_percent'] or 0 }}%</span>
+                    </div>
+                </td>
+                <td>
+                    <span class="priority-pill {{ task['priority'] }}">{{ priority_labels[task['priority']] }}</span>
+                </td>
+                <td>
+                    <span class="status-badge st-{{ task['status'] }}">
+                        {{ status_labels[task['status']] }}
+                    </span>
+                </td>
+                <td {% if task['status'] == 'overdue' %}style="color:var(--color-red);font-weight:500;"{% endif %}>
+                    {{ task['due_date']|format_date }}
+                </td>
+                <td class="text-muted">{{ task['updated_at']|time_ago }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+
+    {# ============================================================ #}
+    {# 分页导航（每页条数由 config.TASKS_PER_PAGE 控制） #}
+    {# ============================================================ #}
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        {% if page > 1 %}
+            <a href="{{ url_for('task.task_list', **dict(filters, page=page-1)) }}">上一页</a>
+        {% else %}
+            <span class="disabled">上一页</span>
+        {% endif %}
+
+        {% for p in range(1, total_pages + 1) %}
+            {% if p == page %}
+                <span class="current">{{ p }}</span>
+            {% elif p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %}
+                <a href="{{ url_for('task.task_list', **dict(filters, page=p)) }}">{{ p }}</a>
+            {% elif p == page - 3 or p == page + 3 %}
+                <span class="disabled">...</span>
+            {% endif %}
+        {% endfor %}
+
+        {% if page < total_pages %}
+            <a href="{{ url_for('task.task_list', **dict(filters, page=page+1)) }}">下一页</a>
+        {% else %}
+            <span class="disabled">下一页</span>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="pagination-info">
+        共 {{ total }} 条任务，第 {{ page }}/{{ total_pages }} 页，每页 {{ per_page }} 条
+    </div>
+
+    {% else %}
+    <div class="card text-center">
+        <p class="text-muted mb-16">暂无任务</p>
+        <a href="{{ url_for('task.task_new') }}" class="btn btn-primary">创建第一个任务</a>
+    </div>
+    {% endif %}
+</form>
+
+{% endblock %}

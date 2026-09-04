@@ -1,0 +1,71 @@
+{# ============================================================
+   messages/_drawer.html — 消息抽屉片段（V2 批次 3，Q4）
+
+   由 GET /messages/drawer 渲染，main.js 注入抽屉容器（替代独立消息中心页）。
+   结构契约（与 static/js/main.js 对应）：
+   - .drawer-close                       关闭按钮
+   - .message-item[data-message-id][data-task-drawer]
+                                         点击 → 标记已读 + 打开关联任务抽屉
+   - #drawer-mark-all-read               全部已读按钮
+   ============================================================ #}
+{% from "macros/icons.html" import icon %}
+
+<div class="drawer-header">
+    <div class="drawer-header-main">
+        <span class="drawer-eyebrow">{{ icon('bell', 14) }} 消息通知</span>
+        {% if unread_count %}<span class="status-badge st-overdue">{{ unread_count }} 条未读</span>{% endif %}
+    </div>
+    <div class="drawer-header-actions">
+        {% if current_user['role'] == 'admin' %}
+        <a href="{{ url_for('message.send_message') }}" class="btn btn-secondary btn-sm">{{ icon('send', 14) }} 发消息</a>
+        {% endif %}
+        <button type="button" id="drawer-mark-all-read" class="btn btn-secondary btn-sm">{{ icon('check', 14) }} 全部已读</button>
+        <button class="drawer-close" type="button" title="关闭" aria-label="关闭抽屉">{{ icon('x', 18) }}</button>
+    </div>
+</div>
+
+<div class="drawer-body" style="padding:0;">
+
+    {# --- 类型筛选（切换后重新拉取抽屉内容） --- #}
+    <div style="padding:12px 16px;border-bottom:1px solid var(--color-border-light);">
+        <select class="form-control" style="width:100%;"
+                onchange="DB.drawer.open('/messages/drawer?type=' + encodeURIComponent(this.value))">
+            <option value="">类型: 全部</option>
+            {% for t_key, t_label in type_labels.items() %}
+            <option value="{{ t_key }}" {% if current_type == t_key %}selected{% endif %}>{{ t_label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    {# --- 消息列表（最近 50 条） --- #}
+    {% if messages %}
+    <ul class="message-list">
+        {% for msg in messages %}
+        <li class="message-item {{ 'unread' if not msg['is_read'] else '' }}"
+            data-message-id="{{ msg['message_id'] }}"
+            data-task-drawer="{{ url_for('task.task_drawer', task_id=msg['task_id']) if msg['task_id'] else '' }}">
+
+            <div class="message-dot {{ 'unread' if not msg['is_read'] else 'read' }}"></div>
+
+            <div class="message-body">
+                <div class="message-type">
+                    <span class="status-badge {{ type_colors[msg['type']] }}">{{ type_labels[msg['type']] }}</span>
+                    {% if msg['sender_name'] %}
+                    <span class="text-muted" style="margin-left:8px;">来自 {{ msg['sender_name'] }}</span>
+                    {% else %}
+                    <span class="text-muted" style="margin-left:8px;">系统消息</span>
+                    {% endif %}
+                </div>
+                <div class="message-content">{{ msg['content'] }}</div>
+                <div class="message-time">{{ msg['created_at']|time_ago }}{% if msg['task_id'] %} · 点击查看关联任务{% endif %}</div>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <div style="padding:56px 20px;text-align:center;color:var(--color-text-muted);">
+        {{ icon('inbox', 36) }}
+        <p style="margin-top:8px;">暂无消息</p>
+    </div>
+    {% endif %}
+</div>
