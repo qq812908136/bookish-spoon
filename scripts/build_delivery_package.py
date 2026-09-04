@@ -517,6 +517,18 @@ def main():
     # （基线每次重建都会重新复制 05_离线程序/，不改这一步离线脚本永远停留在 v3）
     sync_offline_bats(dst)
 
+    # 演示机开箱即用的 AI 配置：把 docs/ 里那份已填好的 .env 拷进
+    # 05_离线程序/督办系统/.env（exe 同目录，即 config.py 的 BASE_DIR）。
+    # 该文件仅含本地 Ollama 配置、不含任何外部密钥，可随包分发；
+    # sync_offline_exe 只覆盖 exe 与 _internal/，不会动这个 .env。
+    demo_env_src = os.path.join(docs_src, 'AI演示机配置.env')
+    demo_env_dst = os.path.join(dst, '05_离线程序', '督办系统', '.env')
+    if os.path.isfile(demo_env_src):
+        if copy_file(demo_env_src, demo_env_dst):
+            print('  [OK]   已同步 05_离线程序/督办系统/.env（演示机 AI 配置）')
+    else:
+        print('  [警告] docs/AI演示机配置.env 缺失，跳过演示机 .env')
+
     # 3) 开发代码：从当前源码实时装配
     print('[2/4] 装配 03_开发代码（来自当前源码）...')
     build_dev_code(os.path.join(dst, '03_开发代码'))
