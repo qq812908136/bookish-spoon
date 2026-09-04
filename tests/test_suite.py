@@ -42,6 +42,11 @@ PROJECT_DIR = os.path.dirname(TESTS_DIR)
 SRC_DIR = os.path.join(PROJECT_DIR, 'src')
 sys.path.insert(0, SRC_DIR)
 
+# 与开发机 .env 隔离：开发者本机 .env 可能开了 AI_ENABLED=true，
+# 会导致「AI 关闭时应跳转」类用例误失败（2026-09-04 实踩）。
+# config._load_dotenv 只补齐 os.environ 里不存在的键，预置即对 .env 免疫。
+os.environ['AI_ENABLED'] = 'false'
+
 import config
 
 # 使用独立的测试数据库，不影响生产数据
@@ -2980,6 +2985,24 @@ class TestCSRF(unittest.TestCase):
             if 'csrfHeaders' not in chunk:
                 bad.append(chunk.split('\n')[0][:60])
         self.assertEqual(bad, [], '以下 AJAX 写请求没有带 CSRF 令牌: ' + '; '.join(bad))
+
+    def test_no_bare_input_queryselector_in_templates(self):
+        """禁用裸 querySelector('input')：csrf_token 隐藏框是表单第一个 input，
+        裸选择器会把值写进令牌字段（2026-09-04 重置密码 400 事故根因）。"""
+        tpl_root = os.path.join(SRC_DIR, 'templates')
+        bare_re = re.compile(r"""querySelector\(\s*['"]input['"]\s*\)""")
+        bad = []
+        for dirpath, _, filenames in os.walk(tpl_root):
+            for fn in filenames:
+                if not fn.endswith('.html'):
+                    continue
+                path = os.path.join(dirpath, fn)
+                with open(path, 'r', encoding='utf-8') as f:
+                    if bare_re.search(f.read()):
+                        bad.append(os.path.relpath(path, tpl_root))
+        self.assertEqual(bad, [],
+                         "以下模板仍在用裸 querySelector('input')，应改为按 name 选择: "
+                         + ', '.join(sorted(bad)))
 
 
 # ============================================================

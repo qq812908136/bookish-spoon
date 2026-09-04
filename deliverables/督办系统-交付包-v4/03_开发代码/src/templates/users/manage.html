@@ -81,7 +81,7 @@
                             </button>
                         </form>
                         <form method="POST" action="{{ url_for('user.user_reset_password', user_id=u['user_id']) }}"
-                              onsubmit="var p=prompt('请输入新密码（至少 {{ password_min_length }} 位，字母与数字混合）:'); if(!p||p.length<{{ password_min_length }}){alert('密码至少 {{ password_min_length }} 位');return false;} this.querySelector('input').value=p; return true;">
+                              onsubmit="var p=prompt('请输入新密码（至少 {{ password_min_length }} 位，字母与数字混合）:'); if(!p||p.length<{{ password_min_length }}){alert('密码至少 {{ password_min_length }} 位');return false;} this.querySelector('input[name=new_password]').value=p; return true;">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="new_password" value="">
                             <button type="submit" class="btn btn-secondary btn-sm">重置密码</button>

@@ -24,6 +24,10 @@
 - **脱敏**：送模型前按 `AI_MASK_DATA`（默认开）遮蔽手机号 / 邮箱 / 证件号。
 - **熔断**：连续失败超阈值暂停并自动试探恢复；错误日志不含 API Key。
 
+### 修复
+
+- **用户管理「重置密码」提交必报 400（2026-09-04）**：DEF-002 整改给表单加 CSRF 隐藏框时，`csrf_token` 被加在 `new_password` 之前，而重置密码表单的 onsubmit 仍用裸 `querySelector('input')` 取「第一个 input」——结果把新密码写进了令牌字段、真正的密码字段留空，浏览器端每次提交必报「安全令牌无效或已过期」（测试客户端不执行 JS，故此前未暴露）。已改为按 `input[name=new_password]` 选择，并新增模板静态守护用例 `test_no_bare_input_queryselector_in_templates`，全局禁用裸选择器防同类回归。**临时绕行**：让该用户自己在「设置」页修改密码（该表单不受影响）。
+
 #### 技术说明（AI 功能）
 
 - 新增模块：`ai_templates.py`、`ai_service.py`、`ai_dispatcher.py`、`routes/ai_routes.py`；模板 `templates/ai/settings.html`、`templates/ai/result.html`、`templates/ai/draft_input.html`；详情页 `templates/tasks/detail.html` 新增 AI 卡片。结构化草稿**复用** `templates/tasks/form.html` 作为预填表单（不新建草稿专用表单，避免与建任务表单重复）。
@@ -34,7 +38,7 @@
 
 ### 验证
 
-- 全量测试通过（181 项，含 `TestAIDraftReminder` + `TestAIStructuredTaskDraft` + `TestAIBrief` 新增用例：入口渲染权限、生成后预填可编辑、确认采纳发站内信、空内容拒绝、失败回显；结构化抽取预填、复用建任务表单建档、失败回退人工录入；简报/周报生成预览、确认双渠道发送、邮件按订阅去重、失败回显）；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表写入 / 无渲染 / 无报错）。
+- 全量测试通过（182 项，含 `TestAIDraftReminder` + `TestAIStructuredTaskDraft` + `TestAIBrief` 新增用例：入口渲染权限、生成后预填可编辑、确认采纳发站内信、空内容拒绝、失败回显；结构化抽取预填、复用建任务表单建档、失败回退人工录入；简报/周报生成预览、确认双渠道发送、邮件按订阅去重、失败回显；`TestCSRF` 新增裸 `querySelector('input')` 模板静态守护用例）；`AI_ENABLED=false` 时零副作用（无新线程 / 无新表写入 / 无渲染 / 无报错）。测试套件已与本机 `.env` 隔离（预置 `AI_ENABLED=false`，防开发机配置串扰）。
 
 ---
 
